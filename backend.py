@@ -1,5 +1,5 @@
 """
-Módulo Backend del SII "Entrenador IA FCDIA".
+Módulo Backend del SII Athletix.
 
 Procesa los datos crudos de Strava: normaliza columnas duplicadas, descarta
 registros inválidos, calcula la carga de entrenamiento sin falsear los datos
@@ -9,6 +9,7 @@ No depende de Streamlit, por lo que puede probarse de forma independiente.
 """
 import numpy as np                                                                 # Operaciones numéricas vectorizadas
 import pandas as pd                                                                # Manejo y análisis de datos tabulares
+import config                                                                      # Zona horaria y utilidades de fecha
 import data_loader                                                                 # Capa de adquisición de datos
 
 # Variables globales de referencia para la limpieza y el análisis de datos
@@ -31,6 +32,18 @@ DIAS_MESOCICLO = 28                                                             
 UMBRAL_OPTIMO_BAJO = 0.8                                                           # Por debajo hay desentrenamiento
 UMBRAL_OPTIMO_ALTO = 1.3                                                           # Límite superior de la zona óptima
 UMBRAL_RIESGO = 1.5                                                                # Por encima, alto riesgo de lesión
+
+def _fecha_referencia(hoy=None):
+    """
+    Normaliza la fecha desde la que se miden las ventanas móviles.
+
+    Cuando no se indica una fecha se toma el día del atleta y no el del servidor:
+    en la nube el proceso corre en UTC, que de noche ya va un día por delante de
+    Ecuador y desplazaría las ventanas de 7 y 28 días.
+    """
+    if hoy is not None:                                                            # Permite fijar la fecha en pruebas
+        return pd.Timestamp(hoy).normalize()                                       # Respeta la fecha recibida
+    return pd.Timestamp(config.hoy())                                              # Medianoche del día local del atleta
 
 # Limpieza y normalización de datos
 def _normalizar_distancia(df):
@@ -194,7 +207,7 @@ def estado_actual(df, hoy=None):
     Devuelve un diccionario con el ACWR, la etiqueta de riesgo y los días
     transcurridos desde la última actividad registrada.
     """
-    hoy = pd.Timestamp(hoy).normalize() if hoy is not None else pd.Timestamp.today().normalize()  # Fecha de referencia
+    hoy = _fecha_referencia(hoy)                                                   # Día local del atleta como referencia
 
     if df.empty:                                                                   # Sin datos no hay diagnóstico
         return {"acwr": np.nan, "estado": "Sin datos", "dias_inactivo": None}      # Devuelve un estado neutro
@@ -224,7 +237,7 @@ def dias_sin_entrenar(df, hoy=None):
     if df.empty:                                                                   # Sin actividades no hay referencia
         return None                                                                # Señaliza la ausencia de datos
 
-    hoy = pd.Timestamp(hoy).normalize() if hoy is not None else pd.Timestamp.today().normalize()  # Fecha de referencia
+    hoy = _fecha_referencia(hoy)                                                   # Día local del atleta como referencia
     return (hoy - df["Fecha"].max().normalize()).days                              # Diferencia en días naturales
 
 def formatear_ritmo(ritmo_min_km):
@@ -252,7 +265,7 @@ def formatear_horas(horas_decimales):
 
 def calcular_kpis(df, hoy=None):
     """Calcula los indicadores numéricos del panel principal."""
-    hoy = pd.Timestamp(hoy).normalize() if hoy is not None else pd.Timestamp.today().normalize()  # Fecha de referencia
+    hoy = _fecha_referencia(hoy)                                                   # Día local del atleta como referencia
     kpis = {"actividades": len(df)}                                                # Número total de actividades
 
     if df.empty:                                                                   # Protege contra filtros sin resultados
@@ -296,8 +309,10 @@ def resumen_semanal(df):
     semanal["Rango"] = (semanal["Semana"].dt.strftime("%d/%m") + " - "             # Formato '13/07 - 19/07'
                         + fin_semana.dt.strftime("%d/%m"))
 
-    semanal[["Kilometros", "Carga"]] = semanal[["Kilometros", "Carga"]].round(1)
-    return semanal.sort_values("Semana")                                  # Ordena y redondea a un decimal
+    # Solo se redondean las columnas numéricas: aplicar round() al DataFrame completo
+    # incluiría la columna de fecha y pandas emitiría un aviso.
+    semanal[["Kilometros", "Carga"]] = semanal[["Kilometros", "Carga"]].round(1)   # Un decimal en volumen y carga
+    return semanal.sort_values("Semana")                                           # Ordena cronológicamente
 
 def resumen_por_tipo(df):
     """Resume actividades, volumen y horas por tipo de deporte."""
