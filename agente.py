@@ -1,5 +1,5 @@
 """
-Módulo del Agente LLM del SII "Entrenador IA FCDIA".
+Módulo del Agente LLM del SII Athletix.
 Gestiona la capa conversacional del sistema:
 - Persiste el historial de chat en Supabase, de modo que el contexto sobreviva
   al cierre de la aplicación y a los reinicios del entorno en la nube.
@@ -9,8 +9,7 @@ Gestiona la capa conversacional del sistema:
   reales y no opere como un chatbot aislado.
 """
 import os                                     # Acceso a variables de entorno
-from datetime import datetime
-from zoneinfo import ZoneInfo
+import config
 import pandas as pd                           # Comprobación de valores nulos (Ritmo)
 from supabase import create_client, Client    # Cliente de la base de datos en la nube
 
@@ -18,22 +17,7 @@ from supabase import create_client, Client    # Cliente de la base de datos en l
 MAX_MENSAJES = 20            # Ventana de historial enviada al modelo
 MAX_ENTRADAS_DIARIO = 7      # Últimos días de estado que se inyectan al agente
 RETENCION_DIARIO = 30        # Días de diario que se conservan en la base de datos
-MODELO = "claude-haiku-4-5-20251001"  # Modelo rápido y económico de Anthropic
-# La fecha se ancla a la zona del atleta porque el servidor de Streamlit corre en UTC.
-ZONA_HORARIA = ZoneInfo("America/Guayaquil")
-DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
-         "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
-
-# Funciones auxiliares para formatear fechas y construir el contexto del sistema, que se inyecta al agente como prompt de sistema.
-def _hoy():
-    """Devuelve la fecha actual en la zona del atleta, no la del servidor."""
-    return datetime.now(ZONA_HORARIA).date()
-
-# Permite formatear la fecha en español sin depender del locale del sistema, que puede no estar disponible en entornos de nube.
-def _fecha_en_texto(fecha):
-    """Formatea una fecha en español sin depender del locale del sistema."""
-    return f"{DIAS[fecha.weekday()]} {fecha.day} de {MESES[fecha.month - 1]} de {fecha.year}"
+MODELO = "claude-haiku-4-5-20251001"
 
 _supabase: Client | None = None  # Cliente cacheado; se crea una sola vez por sesión
 
@@ -88,7 +72,7 @@ def registrar_estado(estado, nota=""):
     después como hecho estructurado, en lugar de confiar en que el modelo lo
     deduzca del historial conversacional.
     """
-    hoy = _hoy().isoformat()
+    hoy = config.hoy().isoformat()
 
     try:
         cliente = _cliente_supabase()
@@ -119,7 +103,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
         "Recibes los indicadores calculados por un sistema de análisis de datos de Strava.",
         "Responde en español, de forma breve, concreta y sin introducciones largas.",
         "",
-        f"Hoy es {_fecha_en_texto(_hoy())}. Esta es tu única fuente para la fecha actual:",
+        f"Hoy es {config.fecha_en_texto(config.hoy())}. Esta es tu única fuente para la fecha actual:",
         "no la deduzcas ni la inventes, y calcula sobre ella cualquier plazo o cuenta regresiva.",
         "",
         "ESTADO ACTUAL DEL ATLETA (indicadores calculados por el sistema):",
@@ -167,7 +151,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
                       "identifícala en esta lista antes de decir que no tienes el dato.")
 
     lineas.append("")
-    lineas.append("=== COMPONENTE PREDICTIVO (regresión por mesociclos) ===")
+    lineas.append("COMPONENTE PREDICTIVO (regresión por mesociclos)")
     if prediccion and entrenamiento:
         lineas.append(f"- Ritmo de competición estimado: {prediccion['ritmo']:.2f} min/km.")
         lineas.append(f"- Tiempo proyectado en {prediccion['distancia']:.1f} km: {prediccion['tiempo_texto']}.")
@@ -180,7 +164,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
 
     if diario:
         lineas.append("")
-        lineas.append("=== DIARIO DE ESTADO FÍSICO (declarado por el atleta) ===")
+        lineas.append("DIARIO DE ESTADO FÍSICO (declarado por el atleta)")
         for registro in diario[-MAX_ENTRADAS_DIARIO:]:
             nota = f" — {registro['nota']}" if registro.get("nota") else ""
             lineas.append(f"- {registro['fecha']}: {registro['estado']}{nota}")
@@ -190,7 +174,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
 
     lineas += [
         "",
-        "=== REGLAS ===",
+        "REGLAS",
         "1. Fundamenta cada recomendación en los indicadores anteriores, citando el dato concreto.",
         "2. Nunca inventes datos que no aparezcan en este contexto.",
         "3. Recuerda que eres un apoyo a la decisión: la decisión final es del atleta.",
