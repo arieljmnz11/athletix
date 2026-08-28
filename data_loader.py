@@ -10,6 +10,8 @@ capa de almacenamiento que sobrevive a los reinicios del entorno en la nube.
 
 import os                                     # Acceso a variables de entorno
 import pandas as pd                           # Manejo de datos tabulares
+import re
+import numpy as np
 import requests                               # Cliente HTTP para la API de Strava
 from dotenv import load_dotenv                # Carga del archivo .env local
 from supabase import create_client, Client    # Cliente de la base de datos en la nube
@@ -20,6 +22,8 @@ RUTA_CSV = "actividades_strava.csv"  # CSV histórico exportado de Strava (se qu
 MARGEN_SINCRONIZACION = 3            # Días de solape al descargar novedades
 URL_TOKEN = "https://www.strava.com/oauth/token"
 URL_ACTIVIDADES = "https://www.strava.com/api/v3/athlete/activities"
+TABLA_FC = "fc_manual"
+TAMANO_PAGINA = 1000
 
 TABLA_SYNC = "actividades_sincronizadas"  # Tabla de Supabase que reemplaza al CSV incremental
 
@@ -128,6 +132,160 @@ def _leer_sync_supabase():
     tabla = tabla.rename(columns=mapa_inverso)
     return tabla[[c for c in MAPA_COLUMNAS_SYNC.keys() if c in tabla.columns]]
 
+def _leer_tabla_paginada(tabla, columnas, columna_filtro=None, valor_filtro=None):
+    """Descarga una tabla completa sorteando el tope de 1000 filas por petición de la API.
+
+    Args:
+        tabla (str): Nombre de la tabla en Supabase.
+        columnas (str): Lista de columnas en formato de la API.
+        columna_filtro (str | None): Columna sobre la que filtrar, si aplica.
+        valor_filtro: Valor exacto que debe tomar esa columna.
+    Returns:
+        list[dict]: Todas las filas encontradas.
+    """
+    filas = []
+    desde = 0
+    while True:
+        consulta = _cliente_supabase().table(tabla).select(columnas)
+        if columna_filtro is not None:
+            consulta = consulta.eq(columna_filtro, valor_filtro)
+        lote = consulta.order("id").range(desde, desde + TAMANO_PAGINA - 1).execute().data
+        if not lote:
+            break
+        filas.extend(lote)
+        if len(lote) < TAMANO_PAGINA:
+            break
+        desde += TAMANO_PAGINA
+    return filas
+
+
+def _hhmmss_a_segundos(valor):
+    """Convierte 'HH:MM:SS' o 'MM:SS' a segundos, o None si el texto no es un tiempo."""
+    partes = valor.split(":")
+    if not 2 <= len(partes) <= 3:
+        return None
+    try:
+        numeros = [int(p) for p in partes]
+    except ValueError:
+        return None
+    while len(numeros) < 3:
+        numeros.insert(0, 0)
+    return numeros[0] * 3600 + numeros[1] * 60 + numeros[2]
+
+
+def parsear_serie_fc(texto):
+    """Convierte el texto copiado del reloj en una serie ordenada de tiempo y pulso.
+
+    Args:
+        texto (str): Filas con tiempo y pulso separados por tabulador, coma o espacios.
+    Returns:
+        pd.DataFrame: Columnas 'tiempo_s' y 'fc_ppm', ordenadas y sin tiempos repetidos.
+    """
+    filas = []
+    for linea in texto.splitlines():
+        # Las líneas de cabecera y los separadores se descartan solos al fallar el parseo.
+        partes = [p for p in re.split(r"[\t,;]|\s+", linea.strip()) if p]
+        if len(partes) < 2:
+            continue
+        segundos = _hhmmss_a_segundos(partes[0])
+        if segundos is None:
+            continue
+        try:
+            pulso = int(round(float(partes[1].replace(",", "."))))
+        except ValueError:
+            continue
+        filas.append({"tiempo_s": segundos, "fc_ppm": pulso})
+    if not filas:
+        return pd.DataFrame(columns=["tiempo_s", "fc_ppm"])
+    serie = pd.DataFrame(filas).drop_duplicates(subset="tiempo_s", keep="last")
+    return serie.sort_values("tiempo_s").reset_index(drop=True)
+
+
+def guardar_fc_manual(fecha_actividad, serie):
+    """Persiste la serie de pulso de una actividad reemplazando las muestras repetidas.
+
+    Args:
+        fecha_actividad (str): Clave de la actividad, idéntica a la que guarda Strava.
+        serie (pd.DataFrame): Salida de parsear_serie_fc.
+    Returns:
+        tuple[int, str]: Muestras guardadas y mensaje de estado.
+    """
+    if serie.empty:
+        return 0, "No se reconoció ninguna muestra en el texto pegado."
+    registros = [
+        {"fecha_actividad": fecha_actividad, "tiempo_s": int(f.tiempo_s), "fc_ppm": int(f.fc_ppm)}
+        for f in serie.itertuples()
+    ]
+    try:
+        _cliente_supabase().table(TABLA_FC).upsert(
+            registros, on_conflict="fecha_actividad,tiempo_s"
+        ).execute()
+        return len(registros), f"Se guardaron {len(registros)} muestras de pulso."
+    except Exception as error:
+        return 0, f"No se pudo guardar la serie: {error}"
+
+
+def leer_fc_manual(fecha_actividad=None):
+    """Recupera las muestras de pulso cargadas a mano, de una actividad o de todas."""
+    columnas_vacias = ["fecha_actividad", "tiempo_s", "fc_ppm"]
+    try:
+        filtro = "fecha_actividad" if fecha_actividad is not None else None
+        filas = _leer_tabla_paginada(TABLA_FC, "id, fecha_actividad, tiempo_s, fc_ppm",
+                                     filtro, fecha_actividad)
+    except Exception:
+        return pd.DataFrame(columns=columnas_vacias)
+    if not filas:
+        return pd.DataFrame(columns=columnas_vacias)
+    return pd.DataFrame(filas)[columnas_vacias]
+
+
+def _media_ponderada_por_tiempo(tiempos, pulsos):
+    """Integra el pulso por regla del trapecio y lo divide entre la duración total.
+
+    El trazado manual produce muestras a intervalos irregulares, así que un promedio
+    simple sobrepondera los tramos donde el dedo avanzó más lento.
+    """
+    if len(tiempos) == 0:
+        return None
+    if len(tiempos) == 1:
+        return float(pulsos[0])
+    intervalos = np.diff(tiempos)
+    duracion = intervalos.sum()
+    if duracion <= 0:
+        return float(np.mean(pulsos))
+    promedios_tramo = (pulsos[:-1] + pulsos[1:]) / 2
+    return float((promedios_tramo * intervalos).sum() / duracion)
+
+
+def resumen_fc_manual():
+    """Devuelve FC media ponderada y FC máxima por actividad con serie cargada."""
+    columnas_vacias = ["fecha_actividad", "fc_media_manual", "fc_maxima_manual"]
+    muestras = leer_fc_manual()
+    if muestras.empty:
+        return pd.DataFrame(columns=columnas_vacias)
+    filas = []
+    for clave, grupo in muestras.groupby("fecha_actividad"):
+        grupo = grupo.sort_values("tiempo_s")
+        tiempos = grupo["tiempo_s"].to_numpy(dtype=float)
+        pulsos = grupo["fc_ppm"].to_numpy(dtype=float)
+        filas.append({
+            "fecha_actividad": clave,
+            "fc_media_manual": _media_ponderada_por_tiempo(tiempos, pulsos),
+            "fc_maxima_manual": float(pulsos.max()),
+        })
+    return pd.DataFrame(filas)
+
+
+def listar_actividades_sin_fc():
+    """Lista las actividades sincronizadas sin pulso, para saber dónde cargar la serie."""
+    datos = _leer_sync_supabase()
+    if datos.empty or "Ritmo cardiaco promedio" not in datos.columns:
+        return pd.DataFrame(columns=["Fecha de la actividad", "Tipo de actividad"])
+    sin_fc = datos[datos["Ritmo cardiaco promedio"].isna()]
+    return sin_fc[["Fecha de la actividad", "Tipo de actividad"]].sort_values(
+        "Fecha de la actividad", ascending=False
+    )
+
 def sincronizar_con_strava(fecha_ultima_actividad=None):
     """
     Descarga de la API únicamente las actividades posteriores a la última que ya
@@ -193,4 +351,30 @@ def leer_fuentes_crudas():
     for columna in columnas_utiles:
         if columna not in unido.columns:
             unido[columna] = pd.NA
+    
+        # La FC manual solo rellena huecos: si Strava trajo pulso propio, ese dato manda.
+    resumen = resumen_fc_manual()
+    if not resumen.empty:
+        mapa_media = dict(zip(resumen["fecha_actividad"], resumen["fc_media_manual"]))
+        aporte = unido["Fecha de la actividad"].astype(str).map(mapa_media)
+        unido["Ritmo cardiaco promedio"] = unido["Ritmo cardiaco promedio"].fillna(aporte)
+        
     return unido
+
+# Función para borrar las muestras de pulso manuales de una actividad específica
+def borrar_fc_manual(fecha_actividad):
+    """Elimina todas las muestras de pulso cargadas para una actividad.
+
+    Args:
+        fecha_actividad (str): Clave de la actividad cuya serie se descarta.
+    Returns:
+        tuple[int, str]: Muestras eliminadas y mensaje de estado.
+    """
+    try:
+        respuesta = _cliente_supabase().table(TABLA_FC).delete().eq(
+            "fecha_actividad", fecha_actividad
+        ).execute()
+        borradas = len(respuesta.data or [])
+        return borradas, f"Se eliminaron {borradas} muestras de {fecha_actividad}."
+    except Exception as error:
+        return 0, f"No se pudo borrar la serie: {error}"
