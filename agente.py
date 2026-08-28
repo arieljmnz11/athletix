@@ -8,16 +8,32 @@ Gestiona la capa conversacional del sistema:
   calculados por los demás módulos, de forma que el agente interprete datos
   reales y no opere como un chatbot aislado.
 """
-
 import os                                     # Acceso a variables de entorno
-from datetime import date                     # Registro de la fecha del diario
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import pandas as pd                           # Comprobación de valores nulos (Ritmo)
 from supabase import create_client, Client    # Cliente de la base de datos en la nube
+
 
 MAX_MENSAJES = 20            # Ventana de historial enviada al modelo
 MAX_ENTRADAS_DIARIO = 7      # Últimos días de estado que se inyectan al agente
 RETENCION_DIARIO = 30        # Días de diario que se conservan en la base de datos
 MODELO = "claude-haiku-4-5-20251001"  # Modelo rápido y económico de Anthropic
+# La fecha se ancla a la zona del atleta porque el servidor de Streamlit corre en UTC.
+ZONA_HORARIA = ZoneInfo("America/Guayaquil")
+DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+         "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+# Funciones auxiliares para formatear fechas y construir el contexto del sistema, que se inyecta al agente como prompt de sistema.
+def _hoy():
+    """Devuelve la fecha actual en la zona del atleta, no la del servidor."""
+    return datetime.now(ZONA_HORARIA).date()
+
+# Permite formatear la fecha en español sin depender del locale del sistema, que puede no estar disponible en entornos de nube.
+def _fecha_en_texto(fecha):
+    """Formatea una fecha en español sin depender del locale del sistema."""
+    return f"{DIAS[fecha.weekday()]} {fecha.day} de {MESES[fecha.month - 1]} de {fecha.year}"
 
 _supabase: Client | None = None  # Cliente cacheado; se crea una sola vez por sesión
 
@@ -28,9 +44,7 @@ def _cliente_supabase():
         _supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
     return _supabase
 
-# ---------------------------------------------------------
-# PERSISTENCIA DE LA MEMORIA CONVERSACIONAL
-# ---------------------------------------------------------
+# Persistencia del historial de chat en Supabase, solamente que se guarda el rol y el contenido de cada mensaje, no la fecha ni otros metadatos.
 
 def cargar_historial():
     """Recupera desde Supabase el historial de chat de sesiones anteriores."""
@@ -58,9 +72,7 @@ def borrar_historial():
     except Exception:
         pass
 
-# ---------------------------------------------------------
-# DIARIO DE ESTADO FÍSICO
-# ---------------------------------------------------------
+# Esta función gestiona el diario de estado físico que el deportista puede declarar, de modo que el agente pueda priorizarlo sobre los indicadores calculados automáticamente.
 
 def cargar_diario():
     """Recupera desde Supabase el diario de estado físico registrado por el deportista."""
@@ -76,7 +88,8 @@ def registrar_estado(estado, nota=""):
     después como hecho estructurado, en lugar de confiar en que el modelo lo
     deduzca del historial conversacional.
     """
-    hoy = date.today().isoformat()
+    hoy = _hoy().isoformat()
+
     try:
         cliente = _cliente_supabase()
         # 'fecha' es primary key: el upsert reemplaza el registro de hoy si ya existía
@@ -92,9 +105,7 @@ def registrar_estado(estado, nota=""):
         pass
     return cargar_diario()
 
-# ---------------------------------------------------------
-# CONSTRUCCIÓN DEL CONTEXTO DEL SISTEMA (sin cambios respecto a la versión local)
-# ---------------------------------------------------------
+# Función que construye el contexto del sistema para el agente, combinando indicadores, predicciones y diario de estado físico.
 
 def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, actividades_recientes=None):
     """
@@ -108,7 +119,10 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
         "Recibes los indicadores calculados por un sistema de análisis de datos de Strava.",
         "Responde en español, de forma breve, concreta y sin introducciones largas.",
         "",
-        "=== ESTADO ACTUAL DEL ATLETA (datos del sistema) ===",
+        f"Hoy es {_fecha_en_texto(_hoy())}. Esta es tu única fuente para la fecha actual:",
+        "no la deduzcas ni la inventes, y calcula sobre ella cualquier plazo o cuenta regresiva.",
+        "",
+        "ESTADO ACTUAL DEL ATLETA (indicadores calculados por el sistema):",
     ]
     acwr = diagnostico.get("acwr")
     if acwr is not None and acwr == acwr:
@@ -127,7 +141,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
     ]
     if actividades_recientes is not None and not actividades_recientes.empty:
         lineas.append("")
-        lineas.append("=== ÚLTIMAS ACTIVIDADES REGISTRADAS (detalle por sesión) ===")
+        lineas.append("ÚLTIMAS ACTIVIDADES REGISTRADAS detalladas por sesión")
 
         def _valor(fila, *nombres, defecto=None):
             for nombre in nombres:
@@ -184,6 +198,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
     ]
     return "\n".join(lineas)
 
+# Función que envía la conversación al modelo, junto con el contexto del sistema y el historial de chat.
 def consultar_agente(cliente, contexto, mensajes):
     """
     Envía la conversación al modelo junto con el contexto del sistema.
@@ -192,8 +207,13 @@ def consultar_agente(cliente, contexto, mensajes):
     recientes = mensajes[-MAX_MENSAJES:]
     respuesta = cliente.messages.create(
         model=MODELO,
-        max_tokens=700,
+        # Acota la longitud de la respuesta del modelo, no la del prompt de entrada.
+        max_tokens=2000,
         system=contexto,
         messages=[{"role": m["role"], "content": m["content"]} for m in recientes],
     )
-    return respuesta.content[0].text
+    texto = respuesta.content[0].text
+    # Un stop_reason de 'max_tokens' significa que la respuesta quedó incompleta.
+    if respuesta.stop_reason == "max_tokens":
+        texto += "\n\n_(Respuesta cortada por longitud. Pide que continúe si falta algo.)_"
+    return texto
