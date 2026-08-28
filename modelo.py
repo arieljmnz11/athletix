@@ -17,9 +17,7 @@ from sklearn.linear_model import LinearRegression                               
 from sklearn.model_selection import LeaveOneOut, cross_val_predict                 # Validación cruzada exhaustiva
 from sklearn.metrics import r2_score, mean_absolute_error                          # Métricas de error del modelo
 
-# ---------------------------------------------------------
-# CONSTANTES DEL MODELO
-# ---------------------------------------------------------
+# Constantes del modelo
 DISTANCIA_MINIMA_ESFUERZO = 5.0                                                    # Km mínimos para considerar un esfuerzo válido
 RANGO_RITMO_VALIDO = (3.0, 10.0)                                                   # Ritmos plausibles de carrera (min/km)
 EXPONENTE_RIEGEL = 1.06                                                            # Coeficiente estándar de fatiga por distancia
@@ -32,12 +30,12 @@ CARACTERISTICAS = [                                                             
 ]
 
 # Nota metodológica: el número de sesiones se descartó como variable independiente.
-# Su correlación con el volumen semanal es de 0.97, y esa colinealidad invertía el
+# Su correlación con el volumen semanal es aprox de 0.97 (puede variar según como 
+# sea la línea de tiempo de los datos), y esa colinealidad invertía el
 # signo del coeficiente del volumen (el modelo concluía que correr más kilómetros
 # te hace más lento), lo que impedía usar la ecuación de forma inversa en el
 # planificador. Al retirarla, el R² apenas cae de 0.80 a 0.78 y el modelo recupera
 # la coherencia física.
-
 
 def construir_dataset_mesociclos(df):
     """
@@ -71,7 +69,6 @@ def construir_dataset_mesociclos(df):
     datos = datos.dropna()                                                         # Descarta bloques incompletos
 
     return datos                                                                   # Devuelve el dataset consolidado
-
 
 def entrenar_modelo(df):
     """
@@ -107,7 +104,6 @@ def entrenar_modelo(df):
         "coeficientes": dict(zip(CARACTERISTICAS, modelo.coef_)),                  # Peso de cada variable independiente
     }
 
-
 def predecir_ritmo(entrenamiento, metricas_bloque):
     """Predice el ritmo de competición (min/km) a partir de las métricas del bloque."""
     if entrenamiento is None:                                                      # Sin modelo no hay predicción
@@ -115,7 +111,6 @@ def predecir_ritmo(entrenamiento, metricas_bloque):
 
     entrada = pd.DataFrame([metricas_bloque])[CARACTERISTICAS]                     # Ordena las variables como en el ajuste
     return float(entrenamiento["modelo"].predict(entrada)[0])                      # Devuelve el ritmo estimado
-
 
 def metricas_ultimo_bloque(df, hoy=None, dias=28):
     """
@@ -143,7 +138,6 @@ def metricas_ultimo_bloque(df, hoy=None, dias=28):
         "horas_semana_mesociclo": resistencia["Minutos"].sum() / 4 / 60,           # Horas aeróbicas semanales
     }
 
-
 def ritmo_a_tiempo(ritmo_min_km, distancia_km, distancia_referencia=10.0):
     """
     Convierte un ritmo de referencia al tiempo total de una distancia objetivo
@@ -158,7 +152,6 @@ def ritmo_a_tiempo(ritmo_min_km, distancia_km, distancia_referencia=10.0):
     factor = (distancia_km / distancia_referencia) ** EXPONENTE_RIEGEL             # Penalización de Riegel por distancia
     return tiempo_referencia * factor                                              # Tiempo total estimado en minutos
 
-
 def formatear_tiempo(minutos_decimales):
     """Transforma minutos decimales a formato de cronómetro (h:mm:ss)."""
     if minutos_decimales is None or np.isnan(minutos_decimales):                   # Protege contra valores no disponibles
@@ -172,11 +165,9 @@ def formatear_tiempo(minutos_decimales):
         return f"{horas}h {minutos:02d}m {segundos:02d}s"                          # Ejemplo: 1h 52m 30s
     return f"{minutos}m {segundos:02d}s"                                           # Ejemplo: 48m 15s
 
-
 def fuera_de_rango_calibrado(distancia_km):
     """Indica si la distancia objetivo excede el rango con el que se entrenó el modelo."""
     return not (RANGO_CALIBRADO[0] <= distancia_km <= RANGO_CALIBRADO[1])          # True si es una extrapolación
-
 
 def planificar_volumen(entrenamiento, metricas_actuales, ritmo_objetivo):
     """
