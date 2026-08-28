@@ -1,5 +1,5 @@
 """
-Frontend (Streamlit) del SII "Entrenador IA FCDIA".
+Frontend del SII Athletix.
 
 Capa de presentación del sistema: panel de indicadores, análisis de carga,
 componente predictivo con planificador de mesociclo, carga manual de pulso y

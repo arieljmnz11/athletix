@@ -1,5 +1,5 @@
 """
-Módulo Predictivo del SII "Entrenador IA FCDIA".
+Módulo Predictivo del SII Athletix.
 
 Implementa un modelo de Regresión Lineal Múltiple entrenado sobre promedios
 consolidados por mesociclo (bloques de 28 días), evitando así el sesgo del

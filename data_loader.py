@@ -1,5 +1,5 @@
 """
-Módulo de Adquisición de Datos del SII "Entrenador IA FCDIA".
+Módulo de Adquisición de Datos del SII Athletix.
 Implementa la capa de entrada del sistema con una estrategia híbrida:
 1. Carga inicial (backfill) desde el CSV histórico exportado de Strava.
 2. Sincronización incremental vía API REST de Strava (OAuth 2.0), que
