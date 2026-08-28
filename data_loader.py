@@ -239,7 +239,7 @@ def leer_fc_manual(fecha_actividad=None):
     return pd.DataFrame(filas)[columnas_vacias]
 
 
-def _media_ponderada_por_tiempo(tiempos, pulsos):
+def media_ponderada_por_tiempo(tiempos, pulsos):
     """Integra el pulso por regla del trapecio y lo divide entre la duración total.
 
     El trazado manual produce muestras a intervalos irregulares, así que un promedio
@@ -270,7 +270,7 @@ def resumen_fc_manual():
         pulsos = grupo["fc_ppm"].to_numpy(dtype=float)
         filas.append({
             "fecha_actividad": clave,
-            "fc_media_manual": _media_ponderada_por_tiempo(tiempos, pulsos),
+            "fc_media_manual": media_ponderada_por_tiempo(tiempos, pulsos),
             "fc_maxima_manual": float(pulsos.max()),
         })
     return pd.DataFrame(filas)
