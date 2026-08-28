@@ -7,15 +7,11 @@ faltantes y deriva el indicador ACWR sobre una serie diaria real.
 
 No depende de Streamlit, por lo que puede probarse de forma independiente.
 """
-
 import numpy as np                                                                 # Operaciones numéricas vectorizadas
 import pandas as pd                                                                # Manejo y análisis de datos tabulares
-
 import data_loader                                                                 # Capa de adquisición de datos
 
-# ---------------------------------------------------------
-# CONSTANTES DE NEGOCIO
-# ---------------------------------------------------------
+# Variables globales de referencia para la limpieza y el análisis de datos
 DEPORTES_DISTANCIA = ["Carrera", "Bicicleta", "Caminata", "Senderismo"]            # Deportes con distancia GPS fiable
 
 RANGOS_RITMO = {                                                                   # Rangos plausibles de ritmo (min/km)
@@ -36,10 +32,7 @@ UMBRAL_OPTIMO_BAJO = 0.8                                                        
 UMBRAL_OPTIMO_ALTO = 1.3                                                           # Límite superior de la zona óptima
 UMBRAL_RIESGO = 1.5                                                                # Por encima, alto riesgo de lesión
 
-
-# ---------------------------------------------------------
-# LIMPIEZA Y NORMALIZACIÓN
-# ---------------------------------------------------------
+# Limpieza y normalización de datos
 def _normalizar_distancia(df):
     """
     Resuelve el conflicto de columnas duplicadas del export de Strava.
@@ -53,7 +46,6 @@ def _normalizar_distancia(df):
 
     texto = df["Distancia"].astype(str).str.replace(",", ".", regex=False)         # Versión en km con coma decimal
     return pd.to_numeric(texto, errors="coerce")                                   # Devuelve los kilómetros ya numéricos
-
 
 def _parsear_fechas(serie):
     """
@@ -84,7 +76,6 @@ def _parsear_fechas(serie):
 
     return fechas                                                                  # Devuelve todas las fechas homogeneizadas
 
-
 def _filtrar_ritmos_absurdos(df):
     """
     Anula los ritmos fisiológicamente imposibles. Son consecuencia de deportes
@@ -100,7 +91,6 @@ def _filtrar_ritmos_absurdos(df):
 
     df.loc[~valido, "Ritmo (min/km)"] = np.nan                                     # Anula el resto en lugar de borrar filas
     return df                                                                      # Devuelve el DataFrame corregido
-
 
 def _calcular_carga(df):
     """
@@ -134,7 +124,6 @@ def _calcular_carga(df):
         df.loc[faltan, "Carga"] = df.loc[faltan, "Minutos"] * factor               # Estima la carga desde la duración
 
     return df                                                                      # Devuelve el DataFrame con la carga
-
 
 def cargar_y_procesar_datos():
     """
@@ -176,10 +165,7 @@ def cargar_y_procesar_datos():
 
     return df                                                                      # Devuelve el dataset procesado
 
-
-# ---------------------------------------------------------
-# INDICADORES Y COMPONENTE DE ANÁLISIS
-# ---------------------------------------------------------
+# Funciones de análisis y agregación
 def serie_carga_diaria(df, fecha_corte=None):
     """
     Convierte las actividades en una serie diaria continua de carga, rellenando
@@ -200,7 +186,6 @@ def serie_carga_diaria(df, fecha_corte=None):
     serie["ACWR"] = (serie["Carga Aguda"] / serie["Carga Cronica"]).replace([np.inf, -np.inf], np.nan)  # Ratio agudo:crónico
 
     return serie                                                                   # Devuelve la serie diaria completa
-
 
 def estado_actual(df, hoy=None):
     """
@@ -234,7 +219,6 @@ def estado_actual(df, hoy=None):
 
     return {"acwr": acwr, "estado": estado, "dias_inactivo": dias_inactivo}        # Devuelve el diagnóstico completo
 
-
 def dias_sin_entrenar(df, hoy=None):
     """Días transcurridos desde la última actividad del subconjunto recibido."""
     if df.empty:                                                                   # Sin actividades no hay referencia
@@ -265,7 +249,6 @@ def formatear_horas(horas_decimales):
     total_minutos = int(round(horas_decimales * 60))                               # Pasa el total a minutos enteros
     horas, minutos = divmod(total_minutos, 60)                                     # Separa horas completas y resto
     return f"{horas} h {minutos:02d} min"                                          # Devuelve el texto ya formateado
-
 
 def calcular_kpis(df, hoy=None):
     """Calcula los indicadores numéricos del panel principal."""
@@ -299,7 +282,6 @@ def calcular_kpis(df, hoy=None):
 
     return kpis                                                                    # Devuelve el diccionario de indicadores
 
-
 def resumen_semanal(df):
     """Agrega el volumen y la carga por semana calendario, por deporte."""
     if df.empty:                                                                   # Sin datos no hay agregación
@@ -317,7 +299,6 @@ def resumen_semanal(df):
     semanal[["Kilometros", "Carga"]] = semanal[["Kilometros", "Carga"]].round(1)
     return semanal.sort_values("Semana")                                  # Ordena y redondea a un decimal
 
-
 def resumen_por_tipo(df):
     """Resume actividades, volumen y horas por tipo de deporte."""
     if df.empty:                                                                   # Sin datos no hay resumen
@@ -334,7 +315,6 @@ def resumen_por_tipo(df):
     resumen = resumen.drop(columns=["Horas"])                                       # Sustituye la versión decimal
 
     return resumen.reset_index(drop=True)                                          # Reindexa el resultado final
-
 
 def ultimas_actividades(df, n=10):
     """Devuelve las últimas n actividades con las columnas ya formateadas."""

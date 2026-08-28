@@ -20,9 +20,7 @@ import modelo                                                                   
 import agente                                                                       # Agente LLM y memoria
 import data_loader                                                                  # Adquisición de datos
 
-# ---------------------------------------------------------
-# CONFIGURACIÓN DE ENTORNO SEGURO  (NO MODIFICAR)
-# ---------------------------------------------------------
+# Configuración de la API de Claude (Anthropic) para el agente conversacional
 load_dotenv()                                                                       # Lee el archivo .env local y lo carga en memoria
 API_KEY_CLAUDE = os.getenv("ANTHROPIC_API_KEY")                                     # Recupera de forma segura la API Key
 
@@ -44,8 +42,7 @@ st.markdown(                                                                    
 st.title("🏃 Athletix 🚲")                          # Cabecera principal de la aplicación
 st.caption("Monitoreo de carga, predicción de rendimiento y decisiones asistidas por un agente LLM.")  # Descripción breve
 
-
-# CARGA DE DATOS
+# Carga y procesamiento de datos históricos (actividades_strava.csv)
 
 @st.cache_data(show_spinner="Procesando actividades...")                            # Evita recalcular en cada interacción
 def obtener_datos(version):
@@ -62,10 +59,8 @@ if datos_completos is None or datos_completos.empty:                            
     st.error("⚠️ No se encontró 'actividades_strava.csv'. Colócalo en la carpeta del proyecto.")  # Aviso amigable
     st.stop()                                                                       # Detiene la ejecución de la página
 
+# Bloque lateral de controles: selección de deporte, periodo, sincronización y diario de estado
 
-# ---------------------------------------------------------
-# BARRA LATERAL: FILTROS Y SINCRONIZACIÓN
-# ---------------------------------------------------------
 with st.sidebar:                                                                    # Panel lateral de controles
     st.header("⚙️ Controles")                                                       # Título del panel
 
@@ -105,10 +100,7 @@ with st.sidebar:                                                                
         agente.registrar_estado(estado_hoy, nota_hoy)                               # Persiste el registro en disco
         st.success("Estado registrado.")                                            # Confirma la operación al usuario
 
-
-# ---------------------------------------------------------
-# APLICACIÓN DE FILTROS
-# ---------------------------------------------------------
+# Aplica los filtros de deporte y periodo al histórico completo para el análisis de la interfaz
 datos = datos_completos.copy()                                                      # Copia sobre la que aplicar los filtros
 
 if deporte != "Todo":                                                               # Si se ha seleccionado un deporte
@@ -136,15 +128,11 @@ dias_deporte = backend.dias_sin_entrenar(base_deporte)                          
 kpis = backend.calcular_kpis(datos)                                                 # Indicadores del periodo seleccionado
 kpis_hoy = backend.calcular_kpis(base_deporte)                                      # Indicadores vigentes para el agente
 
-
-# ---------------------------------------------------------
-# PESTAÑAS
-# ---------------------------------------------------------
+# Pestñas principales de la interfaz: panel, carga y fatiga, predicción y plan, histórico
 tab_panel, tab_carga, tab_pred, tab_hist = st.tabs(                                 # Estructura principal de la interfaz
     ["📊 Panel", "🔥 Carga y Fatiga", "🎯 Predicción y Plan", "📚 Histórico"]
 )
-
-# ============ PESTAÑA 1: PANEL ============
+# Pestaña 1: panel de indicadores y resumen del periodo
 with tab_panel:                                                                     # Resumen numérico del estado actual
     st.subheader(f"Estado actual — {deporte}")                                      # Título contextualizado al deporte
 
@@ -218,7 +206,7 @@ with tab_panel:                                                                 
                               legend_title_text="", height=340, margin=dict(t=10))
         st.plotly_chart(fig_sem, width="stretch")                                   # Renderiza el gráfico semanal                                   # Renderiza el gráfico semanal
 
-# ============ PESTAÑA 2: CARGA Y FATIGA ============
+# Pestaña 2: análisis de carga y fatiga, con el ACWR como indicador principal
 with tab_carga:                                                                     # Análisis del equilibrio de carga
     st.subheader("Fatiga frente a condición física")                                # Título de la sección
     st.caption("La carga aguda (7 días) refleja la fatiga reciente; la crónica (28 días), la condición acumulada. "
@@ -272,7 +260,7 @@ with tab_carga:                                                                 
                                    xaxis_title="", yaxis_tickformat=".1f", yaxis_range=[0, 2.5])
             st.plotly_chart(fig_acwr, width="stretch")                              # Renderiza el gráfico del ACWR
 
-# ============ PESTAÑA 3: PREDICCIÓN Y PLAN ============
+# Pestaña 3: componente predictivo de rendimiento y planificador de mesociclo
 with tab_pred:                                                                      # Componente predictivo del sistema
     st.subheader("Predicción de rendimiento por mesociclo")                         # Título de la sección
     st.caption("Regresión lineal múltiple entrenada sobre bloques de 28 días. Se usan mesociclos y no semanas "
@@ -391,7 +379,7 @@ with tab_pred:                                                                  
                    f"({origen.strftime('%d/%m/%Y')}). Solo aparecen los bloques con al menos una carrera de 5 km o más. "
                    "El eje está invertido: cuanto más abajo el ritmo, más rápido.")
 
-# ============ PESTAÑA 4: HISTÓRICO ============
+# Pestaña 4: histórico de actividades, con resumen y detalle de las sesiones recientes
 with tab_hist:                                                                      # Consulta del historial de actividades
     st.subheader("Resumen por deporte")                                             # Distribución global de la práctica
 
@@ -416,10 +404,7 @@ with tab_hist:                                                                  
     st.subheader("Últimas actividades")                                             # Detalle de las sesiones recientes
     st.dataframe(backend.ultimas_actividades(datos, 10), width="stretch", hide_index=True)  # Tabla de las 10 últimas
 
-
-# ---------------------------------------------------------
-# AGENTE LLM (CLAUDE) CON MEMORIA PERSISTIDA
-# ---------------------------------------------------------
+# Agente conversacional: recibe los indicadores, la predicción y el diario de estado, y devuelve recomendaciones
 st.divider()                                                                        # Separador del bloque conversacional
 st.subheader("🤖 Entrenador IA")                                                    # Título de la sección del agente
 
