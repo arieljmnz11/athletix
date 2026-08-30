@@ -7,12 +7,12 @@ Implementa la capa de entrada del sistema con una estrategia híbrida:
 El resultado se persiste en Supabase (antes en un CSV local), actuando como
 capa de almacenamiento que sobrevive a los reinicios del entorno en la nube.
 """
-
 import os                                     # Acceso a variables de entorno
 import pandas as pd                           # Manejo de datos tabulares
 import re
 import numpy as np
 import requests                               # Cliente HTTP para la API de Strava
+import metricas_fc
 from dotenv import load_dotenv                # Carga del archivo .env local
 from supabase import create_client, Client    # Cliente de la base de datos en la nube
 
@@ -224,7 +224,6 @@ def guardar_fc_manual(fecha_actividad, serie):
     except Exception as error:
         return 0, f"No se pudo guardar la serie: {error}"
 
-
 def leer_fc_manual(fecha_actividad=None):
     """Recupera las muestras de pulso cargadas a mano, de una actividad o de todas."""
     columnas_vacias = ["fecha_actividad", "tiempo_s", "fc_ppm"]
@@ -237,25 +236,6 @@ def leer_fc_manual(fecha_actividad=None):
     if not filas:
         return pd.DataFrame(columns=columnas_vacias)
     return pd.DataFrame(filas)[columnas_vacias]
-
-
-def media_ponderada_por_tiempo(tiempos, pulsos):
-    """Integra el pulso por regla del trapecio y lo divide entre la duración total.
-
-    El trazado manual produce muestras a intervalos irregulares, así que un promedio
-    simple sobrepondera los tramos donde el dedo avanzó más lento.
-    """
-    if len(tiempos) == 0:
-        return None
-    if len(tiempos) == 1:
-        return float(pulsos[0])
-    intervalos = np.diff(tiempos)
-    duracion = intervalos.sum()
-    if duracion <= 0:
-        return float(np.mean(pulsos))
-    promedios_tramo = (pulsos[:-1] + pulsos[1:]) / 2
-    return float((promedios_tramo * intervalos).sum() / duracion)
-
 
 def resumen_fc_manual():
     """Devuelve FC media ponderada y FC máxima por actividad con serie cargada."""
@@ -270,11 +250,10 @@ def resumen_fc_manual():
         pulsos = grupo["fc_ppm"].to_numpy(dtype=float)
         filas.append({
             "fecha_actividad": clave,
-            "fc_media_manual": media_ponderada_por_tiempo(tiempos, pulsos),
+            "fc_media_manual": metricas_fc.media_ponderada_por_tiempo(tiempos, pulsos),
             "fc_maxima_manual": float(pulsos.max()),
         })
     return pd.DataFrame(filas)
-
 
 def listar_actividades_sin_fc():
     """Lista las actividades sincronizadas sin pulso, para saber dónde cargar la serie."""

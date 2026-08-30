@@ -3,8 +3,8 @@ Frontend del SII Athletix.
 
 Capa de presentación del sistema: panel de indicadores, análisis de carga,
 componente predictivo con planificador de mesociclo, carga manual de pulso y
-agente conversacional. Toda la lógica vive en backend.py, modelo.py, agente.py
-y data_loader.py.
+agente conversacional. Toda la lógica vive en backend.py, modelo.py, agente.py,
+data_loader.py y metricas_fc.py.
 """
 
 import os
@@ -20,10 +20,14 @@ import backend
 import modelo
 import agente
 import data_loader
+import metricas_fc
 
 # En la nube las llaves llegan por Streamlit Secrets; load_dotenv solo aplica en local.
 load_dotenv()
 API_KEY_CLAUDE = os.getenv("ANTHROPIC_API_KEY")
+
+# Paleta de las zonas de intensidad, de la más suave a la más exigente.
+COLORES_ZONA = ["#74B9FF", "#55EFC4", "#FFEAA7", "#FAB1A0", "#EE5A24"]
 
 st.set_page_config(page_title="Athletix", page_icon="🏃", layout="wide")
 
@@ -408,6 +412,19 @@ with tab_pulso:
             format_func=lambda c: etiqueta_actividad(c, tipos.get(c, ""), c in claves_con_serie),
         )
 
+        # Las zonas y el TRIMP de Edwards dependen enteramente de esta referencia. El
+        # máximo observado en las series cargadas es un piso, no el máximo fisiológico.
+        max_observado = (int(round(resumen_manual["fc_maxima_manual"].max()))
+                         if not resumen_manual.empty else 190)
+        fc_maxima = st.number_input(
+            "Frecuencia cardíaca máxima de referencia (ppm)",
+            min_value=140, max_value=220, value=max_observado, step=1,
+            help="Por defecto se propone el máximo observado en las series ya cargadas, que casi "
+                 "siempre queda por debajo del máximo real. Si tienes el dato de un test máximo o "
+                 "de una competición a tope, introdúcelo aquí: las zonas dependen por completo "
+                 "de este número.",
+        )
+
         existente = data_loader.leer_fc_manual(clave)
 
         col_entrada, col_vista = st.columns([1, 1])
@@ -456,27 +473,70 @@ with tab_pulso:
             else:
                 tiempos = vista_serie["tiempo_s"].to_numpy(dtype=float)
                 pulsos = vista_serie["fc_ppm"].to_numpy(dtype=float)
-                media = data_loader.media_ponderada_por_tiempo(tiempos, pulsos)
+                indicadores = metricas_fc.resumen_serie(tiempos, pulsos, fc_maxima)
 
                 v1, v2, v3 = st.columns(3)
-                v1.metric("Muestras", len(vista_serie))
-                v2.metric("FC media", f"{media:.0f} ppm" if media else "—",
+                v1.metric("Muestras", indicadores["muestras"])
+                v2.metric("FC media",
+                          f"{indicadores['fc_media']:.0f} ppm" if indicadores["fc_media"] else "—",
                           help="Media ponderada por tiempo: cada tramo pesa según su duración, "
                                "no según cuántas muestras contiene.")
-                v3.metric("FC máxima", f"{pulsos.max():.0f} ppm")
+                v3.metric("FC máxima", f"{indicadores['fc_maxima']:.0f} ppm")
+
+                if indicadores["fc_maxima"] and indicadores["fc_maxima"] > fc_maxima:
+                    st.warning("Esta serie supera la referencia máxima indicada arriba. Súbela o las "
+                               "zonas quedarán comprimidas hacia Z5.")
 
                 fig_fc = go.Figure()
                 fig_fc.add_trace(go.Scatter(
                     x=tiempos / 60, y=pulsos, mode="lines",
                     line=dict(color="#EE5A24", width=2),
                     hovertemplate="Minuto %{x:.1f}<br>%{y:.0f} ppm<extra></extra>"))
-                fig_fc.update_layout(height=280, margin=dict(t=10),
+                fig_fc.update_layout(height=240, margin=dict(t=10),
                                      xaxis_title="Minutos de actividad", yaxis_title="ppm")
                 st.plotly_chart(fig_fc, width="stretch")
 
-                duracion = (tiempos.max() - tiempos.min()) / 60
-                st.caption(f"Serie {origen_vista}: {duracion:.0f} minutos cubiertos. "
-                           "Los huecos entre muestras se interpolan de forma lineal al calcular la media.")
+                st.caption(f"Serie {origen_vista}: {indicadores['duracion_s'] / 60:.0f} minutos cubiertos. "
+                           "Los huecos entre muestras se interpolan de forma lineal.")
+
+                st.divider()
+                st.markdown("**Reparto por zonas de intensidad**")
+
+                nombres = [nombre for nombre, _, _, _ in metricas_fc.ZONAS]
+                minutos_zona = [indicadores["zonas"][n] / 60 for n in nombres]
+
+                fig_zonas = go.Figure(go.Bar(
+                    x=minutos_zona, y=nombres, orientation="h",
+                    marker_color=COLORES_ZONA,
+                    hovertemplate="%{y}: %{x:.1f} min<extra></extra>"))
+                fig_zonas.update_layout(height=220, margin=dict(t=10),
+                                        xaxis_title="Minutos", yaxis_title="")
+                st.plotly_chart(fig_zonas, width="stretch")
+
+                fuera_de_zona = indicadores["duracion_s"] - sum(indicadores["zonas"].values())
+                if fuera_de_zona > 30:
+                    st.caption(f"{fuera_de_zona / 60:.0f} minutos por debajo del 50 % de la frecuencia "
+                               "máxima quedan fuera del reparto, tal como define el modelo de zonas.")
+
+                z1, z2 = st.columns(2)
+                z1.metric("TRIMP de Edwards", f"{indicadores['trimp_edwards']:.0f}",
+                          help="Suma de los minutos de cada zona por su multiplicador de intensidad "
+                               "(1 a 5). Es una métrica complementaria: la columna Carga que alimenta "
+                               "el ACWR sigue usando la fórmula original para no mezclar escalas.")
+
+                deriva = indicadores["deriva"]
+                if deriva["deriva_pct"] is None:
+                    z2.metric("Deriva cardíaca", "—")
+                    st.caption("La serie es demasiado corta para comparar las dos mitades.")
+                else:
+                    z2.metric("Deriva cardíaca", f"{deriva['deriva_pct']:+.1f} %",
+                              help="Diferencia del pulso medio entre la segunda mitad y la primera. "
+                                   "Un valor positivo con el mismo esfuerzo indica fatiga o "
+                                   "deshidratación.")
+                    if not deriva["estable"]:
+                        st.caption(f"El pulso varió un {deriva['variabilidad_pct']:.0f} % a lo largo de la "
+                                   "sesión, así que no fue un esfuerzo continuo. En series o cuestas "
+                                   "repetidas la deriva no es interpretable.")
 
     if not resumen_manual.empty:
         st.divider()
