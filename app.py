@@ -66,7 +66,7 @@ def etiqueta_actividad(clave, tipo, tiene_serie=False):
     return f"{texto} — {tipo}{marca}"
 
 
-@st.cache_data(show_spinner="Procesando actividades...")
+@st.cache_data(ttl=600, show_spinner="Procesando actividades...")
 def obtener_datos(version):
     """Carga y procesa el histórico. El parámetro 'version' invalida la caché tras sincronizar."""
     return backend.cargar_y_procesar_datos()
@@ -101,6 +101,7 @@ with st.sidebar:
                 nuevas, mensaje = data_loader.sincronizar_con_strava(ultima)
 
             if nuevas > 0:
+                obtener_datos.clear()
                 st.session_state.version_datos += 1
                 st.success(mensaje)
                 st.rerun()
@@ -448,6 +449,7 @@ with tab_pulso:
             if st.button("Guardar serie", width="stretch", disabled=serie_nueva.empty):
                 guardadas, mensaje = data_loader.guardar_fc_manual(clave, serie_nueva)
                 if guardadas:
+                    obtener_datos.clear()
                     st.session_state.version_datos += 1
                     st.success(mensaje)
                     st.rerun()
@@ -459,6 +461,7 @@ with tab_pulso:
                 confirmar = st.checkbox("Confirmo que quiero descartar la serie guardada")
                 if st.button("Borrar serie de esta actividad", width="stretch", disabled=not confirmar):
                     borradas, mensaje = data_loader.borrar_fc_manual(clave)
+                    obtener_datos.clear()
                     st.session_state.version_datos += 1
                     st.success(mensaje) if borradas else st.error(mensaje)
                     st.rerun()

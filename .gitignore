@@ -9,6 +9,3 @@ actividades_sincronizadas.csv
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
-
-prueba_fc.py
-pulso.txt

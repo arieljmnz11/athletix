@@ -124,10 +124,10 @@ def _df_a_registros_sync(df):
 
 def _leer_sync_supabase():
     """Descarga lo sincronizado hasta ahora y lo devuelve con los nombres de columna originales."""
-    respuesta = _cliente_supabase().table(TABLA_SYNC).select("*").execute()
-    if not respuesta.data:
+    filas = _leer_tabla_paginada(TABLA_SYNC, "*")
+    if not filas:
         return pd.DataFrame()
-    tabla = pd.DataFrame(respuesta.data)
+    tabla = pd.DataFrame(filas)
     mapa_inverso = {v: k for k, v in MAPA_COLUMNAS_SYNC.items()}
     tabla = tabla.rename(columns=mapa_inverso)
     return tabla[[c for c in MAPA_COLUMNAS_SYNC.keys() if c in tabla.columns]]

@@ -159,7 +159,9 @@ def cargar_y_procesar_datos():
 
     df = df.dropna(subset=["Fecha", "Tiempo en movimiento"])                       # Descarta registros sin fecha ni duración
     df = df[df["Tiempo en movimiento"] > 0]                                        # Elimina actividades de duración nula
-    df = df.drop_duplicates(subset=["Fecha"])                                      # Evita duplicados entre CSV y API
+    # Ante una actividad presente en ambas fuentes se conserva la de la API, que se
+    # concatena después y es la que lleva enlazada la frecuencia cardíaca manual.
+    df = df.drop_duplicates(subset=["Fecha"], keep="last")                         # Evita duplicados entre CSV y API
     df = df.sort_values("Fecha").reset_index(drop=True)                            # Ordena cronológicamente
 
     df["Minutos"] = df["Tiempo en movimiento"] / 60                                # Duración en minutos
