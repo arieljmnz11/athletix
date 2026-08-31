@@ -18,12 +18,14 @@ DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "doming
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
          "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
-
+# Funciones de utilidad para el manejo de fechas
+# Esta función se usa en el backend y en el agente, y no depende de la zona del servidor de Streamlit, 
+# sino de la del atleta.
 def hoy():
     """Devuelve la fecha actual en la zona del atleta, no la del servidor."""
     return datetime.now(ZONA_HORARIA).date()
 
-
+# Esta función se usa en el backend y en el agente, y no depende del sistema operativo.
 def fecha_en_texto(fecha):
     """Formatea una fecha en español sin depender del locale del sistema operativo."""
     return f"{DIAS[fecha.weekday()]} {fecha.day} de {MESES[fecha.month - 1]} de {fecha.year}"
