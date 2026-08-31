@@ -349,14 +349,16 @@ def leer_fuentes_crudas():
         presentes = [c for c in columnas_utiles if c in datos.columns]
         datos = datos[presentes].dropna(axis=1, how="all")
         if not datos.empty:
-            fuentes.append(datos)
+            # La procedencia se conserva porque el solape entre fuentes no se puede
+            # detectar comparando fechas: cada una las guarda en un huso distinto.
+            fuentes.append(datos.assign(Origen="csv"))
 
     datos_sync = _leer_sync_supabase()
     if not datos_sync.empty:
         presentes = [c for c in columnas_utiles if c in datos_sync.columns]
         datos_sync = datos_sync[presentes].dropna(axis=1, how="all")
         if not datos_sync.empty:
-            fuentes.append(datos_sync)
+            fuentes.append(datos_sync.assign(Origen="api"))
 
     if not fuentes:
         return None

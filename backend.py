@@ -180,10 +180,18 @@ def cargar_y_procesar_datos():
     df["Tiempo transcurrido"] = _normalizar_tiempo_transcurrido(crudo)             # Duración con paradas incluidas
     df["Ritmo cardiaco promedio"] = pd.to_numeric(crudo["Ritmo cardiaco promedio"], errors="coerce")  # FC media real
     df["Desnivel positivo"] = pd.to_numeric(crudo["Desnivel positivo"], errors="coerce").fillna(0)  # Desnivel acumulado
+    df["Origen"] = crudo["Origen"] if "Origen" in crudo.columns else "csv"
 
     df = df.dropna(subset=["Fecha", "Tiempo en movimiento"])                       # Descarta registros sin fecha ni duración
     df = df[df["Tiempo en movimiento"] > 0]                                        # Elimina actividades de duración nula
 
+    # El export de Strava fecha en UTC y la API en hora local, así que una misma
+    # actividad no coincide entre ambas y se contaría dos veces. Como la sincronización
+    # ya cubre todo el histórico, la API manda y el CSV solo aporta lo que la preceda.
+    if (df["Origen"] == "api").any():
+        inicio_api = df.loc[df["Origen"] == "api", "Fecha"].min()
+        df = df[(df["Origen"] == "api") | (df["Fecha"] < inicio_api)]
+        
     # Ante una actividad presente en ambas fuentes se conserva la de la API, que se
     # concatena después y es la que lleva enlazada la frecuencia cardíaca manual.
     df = df.drop_duplicates(subset=["Fecha"], keep="last")
@@ -353,10 +361,13 @@ def resumen_semanal(df):
         Minutos=("Minutos", "sum"),                                                # Duración en movimiento acumulada
     ).reset_index()                                                                # Devuelve el índice a columnas
 
-    # Etiqueta legible del rango completo (lunes a domingo) en lugar de una fecha suelta.
-    fin_semana = semanal["Semana"] + pd.Timedelta(days=6)                          # Domingo de cada semana
-    semanal["Rango"] = (semanal["Semana"].dt.strftime("%d/%m") + " - "             # Formato '13/07 - 19/07'
-                        + fin_semana.dt.strftime("%d/%m"))
+    # Etiqueta legible del rango completo (lunes a domingo). Incluye el año porque el
+    # gráfico la usa como categoría del eje y, sin él, las semanas homónimas de años
+    # distintos se apilarían en una sola barra.
+    fin_semana = semanal["Semana"] + pd.Timedelta(days=6)
+    semanal["Rango"] = (semanal["Semana"].dt.strftime("%d/%m") + " - "
+                        + fin_semana.dt.strftime("%d/%m") + " · "
+                        + semanal["Semana"].dt.strftime("%Y"))
 
     # Solo se redondean las columnas numéricas: aplicar round() al DataFrame completo
     # incluiría la columna de fecha y pandas emitiría un aviso.

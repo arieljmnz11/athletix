@@ -220,34 +220,33 @@ with tab_panel:
 
     semanal = backend.resumen_semanal(datos)
     if not semanal.empty:
-        # El eje usa el rango de la semana como categoría: en el hover unificado el
-        # encabezado es el valor del eje, así que de este modo la semana aparece una
-        # sola vez arriba en lugar de repetirse en la línea de cada deporte.
-        orden_rangos = semanal.sort_values("Semana")["Rango"].drop_duplicates().tolist()
+        paleta = px.colors.qualitative.Plotly
 
-        fig_sem = px.bar(semanal, x="Rango", y="Kilometros", color="Tipo de actividad",
-                         labels={"Kilometros": "Km", "Rango": "Semana"},
-                         custom_data=["Desnivel", "Minutos"],
-                         category_orders={"Rango": orden_rangos})
-
-        # Los deportes estáticos no acumulan distancia ni desnivel, así que su línea
-        # muestra la duración, que es lo único interpretable en esas sesiones.
-        for traza in fig_sem.data:
-            if traza.name in backend.SIN_DISTANCIA:
-                traza.hovertemplate = "%{fullData.name}: %{customdata[1]:.0f} min<extra></extra>"
+        fig_sem = go.Figure()
+        for indice, tipo in enumerate(sorted(semanal["Tipo de actividad"].unique())):
+            sub = semanal[semanal["Tipo de actividad"] == tipo]
+            # Los deportes estáticos no acumulan distancia ni desnivel, así que su línea
+            # muestra la duración, que es lo único interpretable en esas sesiones.
+            if tipo in backend.SIN_DISTANCIA:
+                plantilla = f"{tipo}: %{{customdata[1]:.0f}} min<extra></extra>"
             else:
-                traza.hovertemplate = ("%{fullData.name}: %{y:.1f} km<br>"
-                                       "Desnivel: %{customdata[0]:,.0f} m<extra></extra>")
+                plantilla = (f"{tipo}: %{{y:.1f}} km<br>"
+                             "Desnivel: %{customdata[0]:,.0f} m<extra></extra>")
 
-        # Con muchas semanas las etiquetas se solaparían: se rotula una de cada N y solo
-        # con la fecha de inicio, ya que el rango completo se lee en el hover.
-        paso = max(1, len(orden_rangos) // 12)
-        visibles = orden_rangos[::paso]
-        fig_sem.update_xaxes(tickmode="array", tickvals=visibles,
-                             ticktext=[r.split(" - ")[0] for r in visibles])
+            fig_sem.add_trace(go.Bar(
+                name=tipo, x=sub["Semana"], y=sub["Kilometros"],
+                marker_color=paleta[indice % len(paleta)],
+                customdata=np.stack([sub["Desnivel"], sub["Minutos"]], axis=-1),
+                hovertemplate=plantilla))
 
-        fig_sem.update_layout(yaxis_tickformat=".1f", hovermode="x unified",
-                              legend_title_text="", height=340, margin=dict(t=10))
+        # El eje vuelve a ser temporal para que Plotly rotule los meses por sí solo. El
+        # encabezado del hover se toma de la etiqueta del eje, así que se le da formato
+        # con hoverformat en vez de con etiquetas propias, que lo dejarían inconsistente.
+        fig_sem.update_layout(barmode="stack", hovermode="x unified", height=340,
+                              margin=dict(t=10), legend_title_text="",
+                              xaxis_title="", yaxis_title="Km",
+                              xaxis_hoverformat="Semana del %d/%m/%Y",
+                              yaxis_tickformat=".1f")
         st.plotly_chart(fig_sem, width="stretch")
 
 with tab_carga:
