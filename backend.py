@@ -15,6 +15,9 @@ import data_loader                                                              
 # Variables globales de referencia para la limpieza y el análisis de datos
 DEPORTES_DISTANCIA = ["Carrera", "Bicicleta", "Caminata", "Senderismo"]            # Deportes con distancia GPS fiable
 
+# Deportes estáticos: el GPS no aporta distancia y la métrica interpretable es la duración
+SIN_DISTANCIA = ["Entrenamiento", "Entrenamiento con pesas"]
+
 RANGOS_RITMO = {                                                                   # Rangos plausibles de ritmo (min/km)
     "Carrera": (2.5, 12.0),                                                        # Descarta paradas y errores de reloj
     "Caminata": (7.0, 25.0),                                                       # Caminata y senderismo son más lentos
@@ -59,6 +62,23 @@ def _normalizar_distancia(df):
 
     texto = df["Distancia"].astype(str).str.replace(",", ".", regex=False)         # Versión en km con coma decimal
     return pd.to_numeric(texto, errors="coerce")                                   # Devuelve los kilómetros ya numéricos
+
+def _normalizar_tiempo_transcurrido(df):
+    """
+    Devuelve el tiempo transcurrido en segundos combinando las variantes posibles.
+
+    El export de Strava duplica esta columna igual que la distancia, y las
+    actividades sincronizadas antes de añadir el campo al esquema no lo traen.
+    Se recorren las candidatas y se conserva el primer valor numérico de cada fila.
+    """
+    resultado = pd.Series(np.nan, index=df.index, dtype="float64")                 # Contenedor del resultado
+
+    for columna in ("Tiempo transcurrido", "Tiempo transcurrido.1"):               # Variantes que puede traer el origen
+        if columna in df.columns:                                                  # Solo si la fuente la incluye
+            candidata = pd.to_numeric(df[columna], errors="coerce")                # Fuerza el tipo numérico
+            resultado = resultado.fillna(candidata)                                # Completa los huecos pendientes
+
+    return resultado                                                               # Puede contener NaN si no hay dato
 
 def _parsear_fechas(serie):
     """
@@ -114,6 +134,9 @@ def _calcular_carga(df):
     lugar se usa el TRIMP real donde hay pulsómetro y, donde no lo hay, se
     estima la carga a partir de la duración escalada por el factor mediano
     (carga por minuto) observado en ese mismo deporte.
+
+    La duración empleada es siempre la de movimiento: el tiempo detenido no
+    genera fatiga, aunque sí cuente para el resultado oficial de una competición.
     """
     df["Minutos"] = df["Tiempo en movimiento"] / 60                                # Convierte la duración a minutos
     df["Tiene FC"] = df["Ritmo cardiaco promedio"].notna()                         # Marca la cobertura real del pulsómetro
@@ -154,17 +177,24 @@ def cargar_y_procesar_datos():
     df["Tipo de actividad"] = crudo["Tipo de actividad"]                           # Conserva el deporte practicado
     df["Distancia_km"] = _normalizar_distancia(crudo)                              # Resuelve las columnas duplicadas
     df["Tiempo en movimiento"] = pd.to_numeric(crudo["Tiempo en movimiento"], errors="coerce")  # Duración en segundos
+    df["Tiempo transcurrido"] = _normalizar_tiempo_transcurrido(crudo)             # Duración con paradas incluidas
     df["Ritmo cardiaco promedio"] = pd.to_numeric(crudo["Ritmo cardiaco promedio"], errors="coerce")  # FC media real
     df["Desnivel positivo"] = pd.to_numeric(crudo["Desnivel positivo"], errors="coerce").fillna(0)  # Desnivel acumulado
 
     df = df.dropna(subset=["Fecha", "Tiempo en movimiento"])                       # Descarta registros sin fecha ni duración
     df = df[df["Tiempo en movimiento"] > 0]                                        # Elimina actividades de duración nula
+
     # Ante una actividad presente en ambas fuentes se conserva la de la API, que se
     # concatena después y es la que lleva enlazada la frecuencia cardíaca manual.
-    df = df.drop_duplicates(subset=["Fecha"], keep="last")                         # Evita duplicados entre CSV y API
+    df = df.drop_duplicates(subset=["Fecha"], keep="last")
     df = df.sort_values("Fecha").reset_index(drop=True)                            # Ordena cronológicamente
 
+    # Las actividades anteriores a la incorporación del campo no traen tiempo
+    # transcurrido; se asume igual al de movimiento para no propagar huecos.
+    df["Tiempo transcurrido"] = df["Tiempo transcurrido"].fillna(df["Tiempo en movimiento"])
+
     df["Minutos"] = df["Tiempo en movimiento"] / 60                                # Duración en minutos
+    df["Minutos transcurridos"] = df["Tiempo transcurrido"] / 60                   # Duración total en minutos
     ritmo = df["Minutos"] / df["Distancia_km"].replace(0, np.nan)                  # Ritmo bruto evitando dividir por cero
     df["Ritmo (min/km)"] = ritmo.replace([np.inf, -np.inf], np.nan)                # Elimina infinitos residuales
     df = _filtrar_ritmos_absurdos(df)                                              # Anula los ritmos fuera de rango
@@ -265,6 +295,20 @@ def formatear_horas(horas_decimales):
     horas, minutos = divmod(total_minutos, 60)                                     # Separa horas completas y resto
     return f"{horas} h {minutos:02d} min"                                          # Devuelve el texto ya formateado
 
+def formatear_duracion_corta(segundos):
+    """
+    Convierte una duración en segundos al formato compacto '2h43min' o '45min'.
+
+    Se redondea al minuto más próximo porque los segundos no aportan información
+    útil en las etiquetas y sí ocupan espacio en gráficos y tablas.
+    """
+    if segundos is None or pd.isna(segundos):                                      # Protege contra valores no disponibles
+        return "—"                                                                 # Devuelve un guion como marcador
+
+    minutos_totales = int(round(float(segundos) / 60))                             # Redondea al minuto más cercano
+    horas, minutos = divmod(minutos_totales, 60)                                   # Separa horas completas y resto
+    return f"{horas}h{minutos:02d}min" if horas else f"{minutos}min"               # Omite las horas cuando no las hay
+
 def calcular_kpis(df, hoy=None):
     """Calcula los indicadores numéricos del panel principal."""
     hoy = _fecha_referencia(hoy)                                                   # Día local del atleta como referencia
@@ -279,6 +323,7 @@ def calcular_kpis(df, hoy=None):
     kpis["km_7d"] = ultimos_7["Distancia_km"].sum()                                # Volumen de la última semana
     kpis["km_28d"] = ultimos_28["Distancia_km"].sum()                              # Volumen del último mesociclo
     kpis["km_total"] = df["Distancia_km"].sum()                                    # Volumen histórico acumulado
+    kpis["desnivel_7d"] = ultimos_7["Desnivel positivo"].sum()                     # Desnivel de la última semana
     kpis["desnivel_28d"] = ultimos_28["Desnivel positivo"].sum()                   # Desnivel del último mesociclo
     kpis["horas_28d"] = ultimos_28["Minutos"].sum() / 60                           # Horas entrenadas en 28 días
     kpis["cobertura_fc"] = 100 * df["Tiene FC"].mean()                             # Porcentaje real de datos con pulsómetro
@@ -298,12 +343,14 @@ def calcular_kpis(df, hoy=None):
     return kpis                                                                    # Devuelve el diccionario de indicadores
 
 def resumen_semanal(df):
-    """Agrega el volumen y la carga por semana calendario, por deporte."""
+    """Agrega volumen, carga, desnivel y duración por semana calendario y deporte."""
     if df.empty:                                                                   # Sin datos no hay agregación
         return pd.DataFrame()                                                      # Devuelve un DataFrame vacío
     semanal = df.groupby(["Semana", "Tipo de actividad"]).agg(                     # Agrupa por semana y deporte
         Kilometros=("Distancia_km", "sum"),                                        # Volumen semanal en kilómetros
         Carga=("Carga", "sum"),                                                    # Carga total acumulada en la semana
+        Desnivel=("Desnivel positivo", "sum"),                                     # Desnivel positivo acumulado
+        Minutos=("Minutos", "sum"),                                                # Duración en movimiento acumulada
     ).reset_index()                                                                # Devuelve el índice a columnas
 
     # Etiqueta legible del rango completo (lunes a domingo) en lugar de una fecha suelta.
@@ -313,7 +360,8 @@ def resumen_semanal(df):
 
     # Solo se redondean las columnas numéricas: aplicar round() al DataFrame completo
     # incluiría la columna de fecha y pandas emitiría un aviso.
-    semanal[["Kilometros", "Carga"]] = semanal[["Kilometros", "Carga"]].round(1)   # Un decimal en volumen y carga
+    numericas = ["Kilometros", "Carga", "Desnivel", "Minutos"]                     # Columnas que admiten redondeo
+    semanal[numericas] = semanal[numericas].round(1)                               # Un decimal en todas ellas
     return semanal.sort_values("Semana")                                           # Ordena cronológicamente
 
 def resumen_por_tipo(df):
@@ -324,12 +372,15 @@ def resumen_por_tipo(df):
     resumen = df.groupby("Tipo de actividad").agg(                                 # Agrupa por deporte practicado
         Actividades=("Fecha", "count"),                                            # Número de sesiones
         Kilometros=("Distancia_km", "sum"),                                        # Volumen total acumulado
+        Desnivel=("Desnivel positivo", "sum"),                                     # Desnivel positivo acumulado
         Horas=("Minutos", lambda x: x.sum() / 60),                                 # Tiempo total en horas decimales
     ).reset_index().sort_values("Actividades", ascending=False)                    # Ordena de mayor a menor frecuencia
 
     resumen["Kilometros"] = resumen["Kilometros"].round(1)                          # Un decimal en el volumen
+    resumen["Desnivel"] = resumen["Desnivel"].round(0)                              # El desnivel se expresa en metros
     resumen["Tiempo total"] = resumen["Horas"].apply(formatear_horas)               # Tiempo en formato horas y minutos
     resumen = resumen.drop(columns=["Horas"])                                       # Sustituye la versión decimal
+    resumen = resumen.rename(columns={"Desnivel": "Desnivel (m)"})                  # Aclara la unidad en la cabecera
 
     return resumen.reset_index(drop=True)                                          # Reindexa el resultado final
 
@@ -341,6 +392,10 @@ def ultimas_actividades(df, n=10):
     tabla = df.tail(n).sort_values("Fecha", ascending=False).copy()                # Toma las más recientes primero
     tabla["Fecha"] = tabla["Fecha"].dt.strftime("%d/%m/%Y")                        # Formatea la fecha de forma legible
 
+    # El tiempo transcurrido se guarda ya formateado porque es el dato que interesa
+    # leer de un vistazo; el de movimiento se conserva numérico para el agente.
+    tabla["Tiempo total"] = tabla["Tiempo transcurrido"].apply(formatear_duracion_corta)
+
     # El ritmo (min/km) describe bien la carrera, pero en ciclismo la métrica
     # interpretable es la velocidad media, así que se muestra una u otra según el deporte.
     es_bici = tabla["Tipo de actividad"] == "Bicicleta"                            # Identifica las salidas en bicicleta
@@ -348,9 +403,11 @@ def ultimas_actividades(df, n=10):
     tabla.loc[~es_bici, "Velocidad (km/h)"] = np.nan                               # Oculta la velocidad en el resto
 
     columnas = ["Fecha", "Tipo de actividad", "Distancia_km", "Minutos",           # Columnas relevantes para el usuario
-                "Ritmo (min/km)", "Velocidad (km/h)", "Carga"]
+                "Tiempo total", "Desnivel positivo", "Ritmo (min/km)",
+                "Velocidad (km/h)", "Carga"]
     tabla = tabla[columnas].round(1)                                               # Redondea para evitar decimales largos
     tabla["Ritmo (min/km)"] = tabla["Ritmo (min/km)"].apply(formatear_ritmo)       # Convierte el ritmo a min:seg
     return tabla.rename(columns={"Distancia_km": "Km", "Minutos": "Duración Minutos",           # Nombres cortos para la tabla
+                                 "Desnivel positivo": "D+ (m)",
                                  "Ritmo (min/km)": "Ritmo (min:s/km)",
                                  "Velocidad (km/h)": "Velocidad (km/h)"})

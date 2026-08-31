@@ -10,9 +10,8 @@ Gestiona la capa conversacional del sistema:
 """
 import os                                     # Acceso a variables de entorno
 import config
-import pandas as pd                           # Comprobación de valores nulos (Ritmo)
+import pandas as pd                           # Para la comprobación de valores nulos
 from supabase import create_client, Client    # Cliente de la base de datos en la nube
-
 
 MAX_MENSAJES = 20            # Ventana de historial enviada al modelo
 MAX_ENTRADAS_DIARIO = 7      # Últimos días de estado que se inyectan al agente
@@ -106,6 +105,8 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
         f"Hoy es {config.fecha_en_texto(config.hoy())}. Esta es tu única fuente para la fecha actual:",
         "no la deduzcas ni la inventes, y calcula sobre ella cualquier plazo o cuenta regresiva.",
         "",
+        "No calcules ni menciones el día de la semana de ninguna fecha salvo el de hoy, "
+        "que ya viene indicado arriba.",
         "ESTADO ACTUAL DEL ATLETA (indicadores calculados por el sistema):",
     ]
     acwr = diagnostico.get("acwr")
@@ -135,20 +136,31 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
 
         for _, fila in actividades_recientes.iterrows():
             km = _valor(fila, "Km", "Distancia_km", defecto=0)
-            minutos = _valor(fila, "Min", "Minutos", defecto=0)
+            minutos = _valor(fila, "Duración Minutos", "Minutos", "Min", defecto=0)
             carga = _valor(fila, "Carga", defecto=0)
             fecha = _valor(fila, "Fecha", defecto="fecha desconocida")
             tipo = _valor(fila, "Tipo de actividad", defecto="Actividad")
+            desnivel = _valor(fila, "D+ (m)", "Desnivel positivo", defecto=0)
+            tiempo_total = _valor(fila, "Tiempo total")
             ritmo = _valor(fila, "Ritmo (min:s/km)", "Ritmo (min/km)")
+            
             if isinstance(ritmo, (int, float)):
                 ritmo = f"{int(ritmo)}:{int(round((ritmo % 1) * 60)):02d}"
             ritmo_txt = f", ritmo {ritmo} min/km" if ritmo not in (None, "—") else ""
             velocidad = _valor(fila, "Vel (km/h)", "Velocidad (km/h)")
             vel_txt = f", velocidad {velocidad:.1f} km/h" if velocidad is not None else ""
-            lineas.append(f"- {fecha}: {tipo}, {km:.1f} km en {minutos:.0f} min"
+
+            total_txt = f", tiempo total {tiempo_total}" if tiempo_total else ""
+            lineas.append(f"- {fecha}: {tipo}, {km:.1f} km en {minutos:.0f} min de movimiento"
+                          f"{total_txt}, desnivel positivo {desnivel:.0f} m"
                           f"{ritmo_txt}{vel_txt}, carga {carga:.0f}.")
+            
         lineas.append("Si el atleta pregunta por 'mi última salida' o describe una sesión concreta, "
                       "identifícala en esta lista antes de decir que no tienes el dato.")
+        
+        lineas.append("El ritmo mostrado se calcula sobre distancia horizontal. En salidas con "
+                      "desnivel alto no refleja el esfuerzo real: interpreta esas sesiones "
+                      "considerando el desnivel y el tiempo total, no solo el ritmo.")
 
     lineas.append("")
     lineas.append("COMPONENTE PREDICTIVO (regresión por mesociclos)")

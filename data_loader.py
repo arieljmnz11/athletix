@@ -24,6 +24,7 @@ URL_TOKEN = "https://www.strava.com/oauth/token"
 URL_ACTIVIDADES = "https://www.strava.com/api/v3/athlete/activities"
 TABLA_FC = "fc_manual"
 TAMANO_PAGINA = 1000
+TAMANO_LOTE_UPSERT = 500
 
 TABLA_SYNC = "actividades_sincronizadas"  # Tabla de Supabase que reemplaza al CSV incremental
 
@@ -33,6 +34,7 @@ MAPA_COLUMNAS_SYNC = {
     "Tipo de actividad": "tipo_actividad",
     "Distancia.1": "distancia_m",
     "Tiempo en movimiento": "tiempo_movimiento_s",
+    "Tiempo transcurrido": "tiempo_transcurrido_s",
     "Desnivel positivo": "desnivel_positivo_m",
     "Ritmo cardiaco promedio": "fc_promedio",
     "Velocidad promedio": "velocidad_promedio",
@@ -104,6 +106,9 @@ def _json_a_formato_csv(actividades):
     salida["Tipo de actividad"] = df[tipo_origen].map(TIPOS_API_A_CSV).fillna(df[tipo_origen])
     salida["Distancia.1"] = df.get("distance")
     salida["Tiempo en movimiento"] = df.get("moving_time")
+    # El tiempo transcurrido incluye las paradas; es el tiempo oficial de una competición,
+    # mientras que el de movimiento es el que refleja la carga real de entrenamiento.
+    salida["Tiempo transcurrido"] = df.get("elapsed_time")
     salida["Desnivel positivo"] = df.get("total_elevation_gain")
     salida["Ritmo cardiaco promedio"] = df.get("average_heartrate")
     salida["Velocidad promedio"] = df.get("average_speed")
@@ -121,16 +126,6 @@ def _df_a_registros_sync(df):
          for clave, valor in registro.items()}
         for registro in registros
     ]
-
-def _leer_sync_supabase():
-    """Descarga lo sincronizado hasta ahora y lo devuelve con los nombres de columna originales."""
-    filas = _leer_tabla_paginada(TABLA_SYNC, "*")
-    if not filas:
-        return pd.DataFrame()
-    tabla = pd.DataFrame(filas)
-    mapa_inverso = {v: k for k, v in MAPA_COLUMNAS_SYNC.items()}
-    tabla = tabla.rename(columns=mapa_inverso)
-    return tabla[[c for c in MAPA_COLUMNAS_SYNC.keys() if c in tabla.columns]]
 
 def _leer_tabla_paginada(tabla, columnas, columna_filtro=None, valor_filtro=None):
     """Descarga una tabla completa sorteando el tope de 1000 filas por petición de la API.
@@ -158,6 +153,15 @@ def _leer_tabla_paginada(tabla, columnas, columna_filtro=None, valor_filtro=None
         desde += TAMANO_PAGINA
     return filas
 
+def _leer_sync_supabase():
+    """Descarga lo sincronizado hasta ahora y lo devuelve con los nombres de columna originales."""
+    filas = _leer_tabla_paginada(TABLA_SYNC, "*")
+    if not filas:
+        return pd.DataFrame()
+    tabla = pd.DataFrame(filas)
+    mapa_inverso = {v: k for k, v in MAPA_COLUMNAS_SYNC.items()}
+    tabla = tabla.rename(columns=mapa_inverso)
+    return tabla[[c for c in MAPA_COLUMNAS_SYNC.keys() if c in tabla.columns]]
 
 def _hhmmss_a_segundos(valor):
     """Convierte 'HH:MM:SS' o 'MM:SS' a segundos, o None si el texto no es un tiempo."""
@@ -171,7 +175,6 @@ def _hhmmss_a_segundos(valor):
     while len(numeros) < 3:
         numeros.insert(0, 0)
     return numeros[0] * 3600 + numeros[1] * 60 + numeros[2]
-
 
 def parsear_serie_fc(texto):
     """Convierte el texto copiado del reloj en una serie ordenada de tiempo y pulso.
@@ -199,7 +202,6 @@ def parsear_serie_fc(texto):
         return pd.DataFrame(columns=["tiempo_s", "fc_ppm"])
     serie = pd.DataFrame(filas).drop_duplicates(subset="tiempo_s", keep="last")
     return serie.sort_values("tiempo_s").reset_index(drop=True)
-
 
 def guardar_fc_manual(fecha_actividad, serie):
     """Persiste la serie de pulso de una actividad reemplazando las muestras repetidas.
@@ -237,6 +239,23 @@ def leer_fc_manual(fecha_actividad=None):
         return pd.DataFrame(columns=columnas_vacias)
     return pd.DataFrame(filas)[columnas_vacias]
 
+def borrar_fc_manual(fecha_actividad):
+    """Elimina todas las muestras de pulso cargadas para una actividad.
+
+    Args:
+        fecha_actividad (str): Clave de la actividad cuya serie se descarta.
+    Returns:
+        tuple[int, str]: Muestras eliminadas y mensaje de estado.
+    """
+    try:
+        respuesta = _cliente_supabase().table(TABLA_FC).delete().eq(
+            "fecha_actividad", fecha_actividad
+        ).execute()
+        borradas = len(respuesta.data or [])
+        return borradas, f"Se eliminaron {borradas} muestras de {fecha_actividad}."
+    except Exception as error:
+        return 0, f"No se pudo borrar la serie: {error}"
+
 def resumen_fc_manual():
     """Devuelve FC media ponderada y FC máxima por actividad con serie cargada."""
     columnas_vacias = ["fecha_actividad", "fc_media_manual", "fc_maxima_manual"]
@@ -271,6 +290,8 @@ def sincronizar_con_strava(fecha_ultima_actividad=None):
     se tiene registrada y las guarda en Supabase mediante upsert. Como
     'fecha_actividad' es columna única, un registro repetido se sobrescribe en
     vez de duplicarse — el mismo efecto que antes lograba drop_duplicates().
+    Llamarla sin argumento descarga el histórico completo, útil para rellenar
+    columnas añadidas al esquema después de las primeras sincronizaciones.
     Devuelve una tupla (numero_de_actividades_nuevas, mensaje_de_estado).
     """
     if not credenciales_strava_disponibles():
@@ -288,9 +309,20 @@ def sincronizar_con_strava(fecha_ultima_actividad=None):
         nuevas = _json_a_formato_csv(crudas)
         if nuevas.empty:
             return 0, "Sin actividades nuevas. Ya estás al día."
+
+        # Strava admite dos actividades con la misma hora de inicio, pero esa columna es
+        # la clave única de la tabla y Postgres rechaza un lote que la repita. Se conserva
+        # la última, igual que hace después el filtrado por fecha del backend.
+        nuevas = nuevas.drop_duplicates(subset="Fecha de la actividad", keep="last")
+
         registros = _df_a_registros_sync(nuevas)
-        _cliente_supabase().table(TABLA_SYNC).upsert(registros, on_conflict="fecha_actividad").execute()
-        return len(crudas), f"Se descargaron {len(crudas)} actividades nuevas."
+        # El histórico completo supera el tamaño cómodo de una sola petición, así que
+        # el upsert se envía por lotes.
+        for inicio in range(0, len(registros), TAMANO_LOTE_UPSERT):
+            _cliente_supabase().table(TABLA_SYNC).upsert(
+                registros[inicio:inicio + TAMANO_LOTE_UPSERT], on_conflict="fecha_actividad"
+            ).execute()
+        return len(registros), f"Se sincronizaron {len(registros)} actividades."
     except requests.exceptions.HTTPError as error:
         return 0, f"Strava rechazó la petición ({error.response.status_code}). Revisa tus credenciales."
     except Exception as error:
@@ -301,12 +333,14 @@ def leer_fuentes_crudas():
     Une el CSV histórico (local, en el repo) con las actividades sincronizadas
     (Supabase). Devuelve un único DataFrame crudo, o None si no hay ninguna fuente.
     """
-    # El export histórico trae 103 columnas y la sincronización solo 7. Recortando
+    # El export histórico trae 103 columnas y la sincronización solo 8. Recortando
     # ambas fuentes al mismo esquema se evita generar columnas vacías al unirlas.
+    # El tiempo transcurrido aparece duplicado en el export igual que la distancia,
+    # por eso se admiten las dos variantes y el backend elige la numérica.
     columnas_utiles = [
         "Fecha de la actividad", "Tipo de actividad", "Distancia", "Distancia.1",
-        "Tiempo en movimiento", "Desnivel positivo", "Ritmo cardiaco promedio",
-        "Velocidad promedio",
+        "Tiempo en movimiento", "Tiempo transcurrido", "Tiempo transcurrido.1",
+        "Desnivel positivo", "Ritmo cardiaco promedio", "Velocidad promedio",
     ]
     fuentes = []
 
@@ -330,30 +364,12 @@ def leer_fuentes_crudas():
     for columna in columnas_utiles:
         if columna not in unido.columns:
             unido[columna] = pd.NA
-    
-        # La FC manual solo rellena huecos: si Strava trajo pulso propio, ese dato manda.
+
+    # La FC manual solo rellena huecos: si Strava trajo pulso propio, ese dato manda.
     resumen = resumen_fc_manual()
     if not resumen.empty:
         mapa_media = dict(zip(resumen["fecha_actividad"], resumen["fc_media_manual"]))
         aporte = unido["Fecha de la actividad"].astype(str).map(mapa_media)
         unido["Ritmo cardiaco promedio"] = unido["Ritmo cardiaco promedio"].fillna(aporte)
-        
+
     return unido
-
-# Función para borrar las muestras de pulso manuales de una actividad específica
-def borrar_fc_manual(fecha_actividad):
-    """Elimina todas las muestras de pulso cargadas para una actividad.
-
-    Args:
-        fecha_actividad (str): Clave de la actividad cuya serie se descarta.
-    Returns:
-        tuple[int, str]: Muestras eliminadas y mensaje de estado.
-    """
-    try:
-        respuesta = _cliente_supabase().table(TABLA_FC).delete().eq(
-            "fecha_actividad", fecha_actividad
-        ).execute()
-        borradas = len(respuesta.data or [])
-        return borradas, f"Se eliminaron {borradas} muestras de {fecha_actividad}."
-    except Exception as error:
-        return 0, f"No se pudo borrar la serie: {error}"

@@ -66,6 +66,8 @@ def etiqueta_actividad(clave, tipo, tiene_serie=False):
     return f"{texto} — {tipo}{marca}"
 
 
+# El ttl acota cuánto puede envejecer la caché si los datos cambian desde otra
+# sesión; el .clear() explícito de cada escritura fuerza el refresco inmediato.
 @st.cache_data(ttl=600, show_spinner="Procesando actividades...")
 def obtener_datos(version):
     """Carga y procesa el histórico. El parámetro 'version' invalida la caché tras sincronizar."""
@@ -218,11 +220,32 @@ with tab_panel:
 
     semanal = backend.resumen_semanal(datos)
     if not semanal.empty:
-        fig_sem = px.bar(semanal, x="Semana", y="Kilometros", color="Tipo de actividad",
-                         labels={"Kilometros": "Km", "Semana": ""},
-                         custom_data=["Rango"])
-        fig_sem.update_traces(
-            hovertemplate="Semana %{customdata[0]}<br>%{fullData.name}: %{y:.1f} km<extra></extra>")
+        # El eje usa el rango de la semana como categoría: en el hover unificado el
+        # encabezado es el valor del eje, así que de este modo la semana aparece una
+        # sola vez arriba en lugar de repetirse en la línea de cada deporte.
+        orden_rangos = semanal.sort_values("Semana")["Rango"].drop_duplicates().tolist()
+
+        fig_sem = px.bar(semanal, x="Rango", y="Kilometros", color="Tipo de actividad",
+                         labels={"Kilometros": "Km", "Rango": "Semana"},
+                         custom_data=["Desnivel", "Minutos"],
+                         category_orders={"Rango": orden_rangos})
+
+        # Los deportes estáticos no acumulan distancia ni desnivel, así que su línea
+        # muestra la duración, que es lo único interpretable en esas sesiones.
+        for traza in fig_sem.data:
+            if traza.name in backend.SIN_DISTANCIA:
+                traza.hovertemplate = "%{fullData.name}: %{customdata[1]:.0f} min<extra></extra>"
+            else:
+                traza.hovertemplate = ("%{fullData.name}: %{y:.1f} km<br>"
+                                       "Desnivel: %{customdata[0]:,.0f} m<extra></extra>")
+
+        # Con muchas semanas las etiquetas se solaparían: se rotula una de cada N y solo
+        # con la fecha de inicio, ya que el rango completo se lee en el hover.
+        paso = max(1, len(orden_rangos) // 12)
+        visibles = orden_rangos[::paso]
+        fig_sem.update_xaxes(tickmode="array", tickvals=visibles,
+                             ticktext=[r.split(" - ")[0] for r in visibles])
+
         fig_sem.update_layout(yaxis_tickformat=".1f", hovermode="x unified",
                               legend_title_text="", height=340, margin=dict(t=10))
         st.plotly_chart(fig_sem, width="stretch")
@@ -389,14 +412,13 @@ with tab_pred:
         fig_prog.update_layout(height=330, margin=dict(t=10))
         st.plotly_chart(fig_prog, width="stretch")
         st.caption(f"Cada punto es un bloque de 28 días, contados desde la primera actividad "
-                   f"({origen.strftime('%d/%m/%Y')}). Solo aparecen los bloques con al menos una carrera de 5 km o más. "
-                   "El eje está invertido: cuanto más abajo el ritmo, más rápido.")
+                   f"{origen.strftime('%d/%m/%Y')}. Solo aparecen los bloques con al menos una carrera de 5 km o más. "
+                   "El eje está invertido, cuanto más bajo sea el ritmo, más rápido.")
 
 with tab_pulso:
     st.subheader("Pulso cargado a mano")
     st.caption("Cuando el reloj registra la frecuencia cardíaca pero no la envía a Strava, la serie se puede "
-               "pegar aquí. El dato alimenta el cálculo de carga igual que si viniera del propio Strava, y "
-               "se guarda en una tabla aparte para que las sincronizaciones posteriores no lo sobrescriban.")
+               "pegar aquí.")
 
     pendientes = data_loader.listar_actividades_sin_fc()
     resumen_manual = data_loader.resumen_fc_manual()
@@ -490,17 +512,32 @@ with tab_pulso:
                     st.warning("Esta serie supera la referencia máxima indicada arriba. Súbela o las "
                                "zonas quedarán comprimidas hacia Z5.")
 
+                # El eje se dibuja en minutos, pero tanto las marcas como el hover se
+                # rotulan en horas y minutos: en sesiones largas «minuto 265» no se lee.
+                etiquetas = [backend.formatear_duracion_corta(t) for t in tiempos]
+
                 fig_fc = go.Figure()
                 fig_fc.add_trace(go.Scatter(
                     x=tiempos / 60, y=pulsos, mode="lines",
+                    customdata=etiquetas,
                     line=dict(color="#EE5A24", width=2),
-                    hovertemplate="Minuto %{x:.1f}<br>%{y:.0f} ppm<extra></extra>"))
+                    hovertemplate="Tiempo: %{customdata}<br>FC: %{y:.0f} ppm<extra></extra>"))
+
+                # Las marcas se reparten en múltiplos de cinco minutos para que las
+                # etiquetas caigan en valores redondos y no se solapen.
+                duracion = max(float(tiempos[-1]), 1.0)
+                paso = max(300, int(round(duracion / 6 / 300)) * 300)
+                marcas_s = np.arange(0, duracion + 1, paso)
+                fig_fc.update_xaxes(
+                    tickmode="array", tickvals=marcas_s / 60,
+                    ticktext=[backend.formatear_duracion_corta(s) for s in marcas_s])
+
                 fig_fc.update_layout(height=240, margin=dict(t=10),
-                                     xaxis_title="Minutos de actividad", yaxis_title="ppm")
+                                     xaxis_title="Tiempo de actividad", yaxis_title="ppm")
                 st.plotly_chart(fig_fc, width="stretch")
 
-                st.caption(f"Serie {origen_vista}: {indicadores['duracion_s'] / 60:.0f} minutos cubiertos. "
-                           "Los huecos entre muestras se interpolan de forma lineal.")
+                st.caption(f"Serie {origen_vista}: {backend.formatear_duracion_corta(indicadores['duracion_s'])} "
+                           "cubiertos. Los huecos entre muestras se interpolan de forma lineal.")
 
                 st.divider()
                 st.markdown("**Reparto por zonas de intensidad**")
@@ -576,16 +613,17 @@ with tab_hist:
     st.divider()
     st.subheader("Últimas actividades")
     st.dataframe(backend.ultimas_actividades(datos, 10), width="stretch", hide_index=True)
+    st.caption("«Duración Minutos» es el tiempo en movimiento, que alimenta el cálculo de carga. "
+               "«Tiempo total» incluye las paradas y es el que cuenta como marca oficial en competición.")
 
 st.divider()
-st.subheader("🤖 Entrenador IA")
+st.subheader("🤖 Coach AI")
 
 if "mensajes" not in st.session_state:
     st.session_state.mensajes = agente.cargar_historial()
 
 cabecera, boton = st.columns([4, 1])
-cabecera.caption("El agente recibe tus indicadores, la predicción del modelo y tu diario de estado. "
-                 "La conversación se guarda en Supabase y sobrevive al cierre de la aplicación.")
+cabecera.caption("El agente recibe tus indicadores, la predicción del modelo y tu diario de estado.")
 
 if boton.button("🗑️ Borrar memoria", width="stretch"):
     agente.borrar_historial()
