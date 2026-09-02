@@ -143,6 +143,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
             desnivel = _valor(fila, "D+ (m)", "Desnivel positivo", defecto=0)
             tiempo_total = _valor(fila, "Tiempo total")
             ritmo = _valor(fila, "Ritmo (min:s/km)", "Ritmo (min/km)")
+            fc = _valor(fila, "FC media", "Ritmo cardiaco promedio")
             
             if isinstance(ritmo, (int, float)):
                 ritmo = f"{int(ritmo)}:{int(round((ritmo % 1) * 60)):02d}"
@@ -151,9 +152,10 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
             vel_txt = f", velocidad {velocidad:.1f} km/h" if velocidad is not None else ""
 
             total_txt = f", tiempo total {tiempo_total}" if tiempo_total else ""
+            fc_txt = f", FC media {fc:.0f} ppm" if fc is not None else ", SIN pulso registrado"
             lineas.append(f"- {fecha}: {tipo}, {km:.1f} km en {minutos:.0f} min de movimiento"
                           f"{total_txt}, desnivel positivo {desnivel:.0f} m"
-                          f"{ritmo_txt}{vel_txt}, carga {carga:.0f}.")
+                          f"{ritmo_txt}{vel_txt}{fc_txt}, carga {carga:.0f}.")
             
         lineas.append("Si el atleta pregunta por 'mi última salida' o describe una sesión concreta, "
                       "identifícala en esta lista antes de decir que no tienes el dato.")
@@ -191,6 +193,12 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
         "2. Nunca inventes datos que no aparezcan en este contexto.",
         "3. Recuerda que eres un apoyo a la decisión: la decisión final es del atleta.",
         "4. Si detectas riesgo de lesión o el atleta declara estar enfermo, dilo con claridad.",
+        "5. Distingue siempre entre lo que mide el sistema y lo que el atleta declara en "
+        "la conversación. Lo declarado se acepta como contexto, se marca como tal y no se "
+        "presenta como dato verificado ni se usa para sostener una conclusión numérica.",
+        "6. Si te preguntan algo que los datos disponibles no permiten confirmar, dilo con "
+        "claridad y señala qué faltaría. Sin pulso registrado no se puede verificar en qué "
+        "zona de intensidad se entrenó, por mucho que el atleta la haya estimado.",
     ]
     return "\n".join(lineas)
 

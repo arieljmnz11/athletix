@@ -414,11 +414,14 @@ def ultimas_actividades(df, n=10):
     tabla.loc[~es_bici, "Velocidad (km/h)"] = np.nan                               # Oculta la velocidad en el resto
 
     columnas = ["Fecha", "Tipo de actividad", "Distancia_km", "Minutos",           # Columnas relevantes para el usuario
-                "Tiempo total", "Desnivel positivo", "Ritmo (min/km)",
-                "Velocidad (km/h)", "Carga"]
+                "Tiempo total", "Desnivel positivo", "Ritmo cardiaco promedio",
+                "Ritmo (min/km)", "Velocidad (km/h)", "Carga"]
+    
     tabla = tabla[columnas].round(1)                                               # Redondea para evitar decimales largos
     tabla["Ritmo (min/km)"] = tabla["Ritmo (min/km)"].apply(formatear_ritmo)       # Convierte el ritmo a min:seg
+
     return tabla.rename(columns={"Distancia_km": "Km", "Minutos": "Duración Minutos",           # Nombres cortos para la tabla
                                  "Desnivel positivo": "D+ (m)",
                                  "Ritmo (min/km)": "Ritmo (min:s/km)",
-                                 "Velocidad (km/h)": "Velocidad (km/h)"})
+                                 "Velocidad (km/h)": "Velocidad (km/h)",
+                                 "Ritmo cardiaco promedio": "FC media"})
