@@ -127,3 +127,20 @@ def resumen_serie(tiempos, pulsos, fc_maxima):
         "trimp_edwards": trimp_edwards(tiempos, pulsos, fc_maxima),
         "deriva": deriva_cardiaca(tiempos, pulsos),
     }
+
+def zona_de_pulso(fc, fc_maxima):
+    """Devuelve la zona de intensidad que corresponde a un valor puntual de pulso.
+
+    Args:
+        fc (float): Pulsaciones por minuto.
+        fc_maxima (float): Referencia de frecuencia cardíaca máxima del atleta.
+    Returns:
+        str | None: Nombre de la zona, o None si no hay dato o no alcanza la zona 1.
+    """
+    if fc is None or not fc_maxima or (isinstance(fc, float) and np.isnan(fc)):
+        return None
+    proporcion = float(fc) / float(fc_maxima)
+    for nombre, bajo, alto, _ in ZONAS:
+        if bajo <= proporcion < alto:
+            return nombre
+    return None

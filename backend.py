@@ -11,6 +11,7 @@ import numpy as np                                                              
 import pandas as pd                                                                # Manejo y análisis de datos tabulares
 import config                                                                      # Zona horaria y utilidades de fecha
 import data_loader                                                                 # Capa de adquisición de datos
+import metricas_fc
 
 # Variables globales de referencia para la limpieza y el análisis de datos
 DEPORTES_DISTANCIA = ["Carrera", "Bicicleta", "Caminata", "Senderismo"]            # Deportes con distancia GPS fiable
@@ -407,6 +408,11 @@ def ultimas_actividades(df, n=10):
     # leer de un vistazo; el de movimiento se conserva numérico para el agente.
     tabla["Tiempo total"] = tabla["Tiempo transcurrido"].apply(formatear_duracion_corta)
 
+    # La zona se deriva de la FC media, que resume la sesión pero no describe su reparto:
+    # una sesión de series puede promediar Z3 sin haber estado nunca en esa zona.
+    tabla["Zona media"] = tabla["Ritmo cardiaco promedio"].apply(
+        lambda fc: metricas_fc.zona_de_pulso(fc, config.FC_MAXIMA) or "—")
+
     # El ritmo (min/km) describe bien la carrera, pero en ciclismo la métrica
     # interpretable es la velocidad media, así que se muestra una u otra según el deporte.
     es_bici = tabla["Tipo de actividad"] == "Bicicleta"                            # Identifica las salidas en bicicleta
@@ -414,8 +420,8 @@ def ultimas_actividades(df, n=10):
     tabla.loc[~es_bici, "Velocidad (km/h)"] = np.nan                               # Oculta la velocidad en el resto
 
     columnas = ["Fecha", "Tipo de actividad", "Distancia_km", "Minutos",           # Columnas relevantes para el usuario
-                "Tiempo total", "Desnivel positivo", "Ritmo cardiaco promedio",
-                "Ritmo (min/km)", "Velocidad (km/h)", "Carga"]
+                "Tiempo total", "Desnivel positivo", "Ritmo cardiaco promedio", 
+                "Zona media", "Ritmo (min/km)", "Velocidad (km/h)", "Carga"]
     
     tabla = tabla[columnas].round(1)                                               # Redondea para evitar decimales largos
     tabla["Ritmo (min/km)"] = tabla["Ritmo (min/km)"].apply(formatear_ritmo)       # Convierte el ritmo a min:seg

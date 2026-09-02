@@ -14,6 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import anthropic
+import config
 from dotenv import load_dotenv
 
 import backend
@@ -434,18 +435,9 @@ with tab_pulso:
             format_func=lambda c: etiqueta_actividad(c, tipos.get(c, ""), c in claves_con_serie),
         )
 
-        # Las zonas y el TRIMP de Edwards dependen enteramente de esta referencia. El
-        # máximo observado en las series cargadas es un piso, no el máximo fisiológico.
-        max_observado = (int(round(resumen_manual["fc_maxima_manual"].max()))
-                         if not resumen_manual.empty else 190)
         fc_maxima = st.number_input(
             "Frecuencia cardíaca máxima de referencia (ppm)",
-            min_value=140, max_value=220, value=max_observado, step=1,
-            help="Por defecto se propone el máximo observado en las series ya cargadas, que casi "
-                 "siempre queda por debajo del máximo real. Si tienes el dato de un test máximo o "
-                 "de una competición a tope, introdúcelo aquí: las zonas dependen por completo "
-                 "de este número.",
-        )
+            min_value=140, max_value=220, value=config.FC_MAXIMA, step=1)
 
         existente = data_loader.leer_fc_manual(clave)
 
@@ -673,7 +665,7 @@ if prompt := st.chat_input("Ej: ¿Qué entreno mañana? ¿Voy bien para bajar de
 
             contexto = agente.construir_contexto(
                 kpis_hoy, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
-                actividades_recientes=backend.ultimas_actividades(datos_completos, 5),
+                actividades_recientes=backend.ultimas_actividades(datos_completos, 20),
             )
 
             with ventana_chat:

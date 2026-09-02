@@ -126,7 +126,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
     ]
     if actividades_recientes is not None and not actividades_recientes.empty:
         lineas.append("")
-        lineas.append("ÚLTIMAS ACTIVIDADES REGISTRADAS detalladas por sesión")
+        lineas.append(f"ÚLTIMAS {len(actividades_recientes)} ACTIVIDADES (no recibes nada anterior)")
 
         def _valor(fila, *nombres, defecto=None):
             for nombre in nombres:
@@ -144,6 +144,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
             tiempo_total = _valor(fila, "Tiempo total")
             ritmo = _valor(fila, "Ritmo (min:s/km)", "Ritmo (min/km)")
             fc = _valor(fila, "FC media", "Ritmo cardiaco promedio")
+            zona = _valor(fila, "Zona media")
             
             if isinstance(ritmo, (int, float)):
                 ritmo = f"{int(ritmo)}:{int(round((ritmo % 1) * 60)):02d}"
@@ -152,7 +153,13 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
             vel_txt = f", velocidad {velocidad:.1f} km/h" if velocidad is not None else ""
 
             total_txt = f", tiempo total {tiempo_total}" if tiempo_total else ""
-            fc_txt = f", FC media {fc:.0f} ppm" if fc is not None else ", SIN pulso registrado"
+
+            if fc is None:
+                fc_txt = ", SIN pulso registrado"
+            else:
+                zona_txt = f" ({zona} media)" if zona and zona != "—" else ""
+                fc_txt = f", FC media {fc:.0f} ppm{zona_txt}"
+
             lineas.append(f"- {fecha}: {tipo}, {km:.1f} km en {minutos:.0f} min de movimiento"
                           f"{total_txt}, desnivel positivo {desnivel:.0f} m"
                           f"{ritmo_txt}{vel_txt}{fc_txt}, carga {carga:.0f}.")
@@ -199,6 +206,11 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
         "6. Si te preguntan algo que los datos disponibles no permiten confirmar, dilo con "
         "claridad y señala qué faltaría. Sin pulso registrado no se puede verificar en qué "
         "zona de intensidad se entrenó, por mucho que el atleta la haya estimado.",
+        "7. La zona indicada por actividad se deriva de la FC media y resume la sesión "
+        "entera. No describe el reparto real del esfuerzo, así que una sesión de series "
+        "puede promediar una zona intermedia sin haber permanecido en ella.",
+        "8. Si preguntan por una fecha que no aparece en la lista de actividades, di que "
+        "queda fuera de la ventana que recibes y no supongas que no está sincronizada."
     ]
     return "\n".join(lineas)
 
