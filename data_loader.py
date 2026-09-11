@@ -38,6 +38,7 @@ MAPA_COLUMNAS_SYNC = {
     "Desnivel positivo": "desnivel_positivo_m",
     "Ritmo cardiaco promedio": "fc_promedio",
     "Ritmo cardiaco máximo": "fc_maxima",
+    "Id de Strava": "strava_id",
     "Velocidad promedio": "velocidad_promedio",
 }
 # Traducción de los tipos de deporte que devuelve la API (inglés) al formato del CSV (español)
@@ -114,6 +115,9 @@ def _json_a_formato_csv(actividades):
     # El máximo por actividad es un suelo observado de la FC máxima real del atleta,
     # más informado que una estimación por edad.
     salida["Ritmo cardiaco máximo"] = df.get("max_heartrate")
+    # Se guarda sin usarlo todavía: es la clave única real de Strava y evitaría que dos
+    # actividades iniciadas en el mismo instante se colapsen en una sola fila.
+    salida["Id de Strava"] = df.get("id")
     salida["Velocidad promedio"] = df.get("average_speed")
     return salida
 
