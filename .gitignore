@@ -9,3 +9,5 @@ actividades_sincronizadas.csv
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
+
+diagnostico.py
