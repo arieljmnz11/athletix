@@ -12,14 +12,15 @@ import numpy as np
 # Modelo de cinco zonas por porcentaje de la frecuencia cardíaca máxima. El cuarto
 # valor es el multiplicador del TRIMP de Edwards (1993): un minuto en zona 5 aporta
 # cinco veces más carga que uno en zona 1.
+# La Z5 no lleva tope: con una FCmax de referencia por debajo de la real, un límite
+# cerrado descartaba en silencio todo el tiempo que la superaba.
 ZONAS = [
     ("Z1", 0.50, 0.60, 1),
     ("Z2", 0.60, 0.70, 2),
     ("Z3", 0.70, 0.80, 3),
     ("Z4", 0.80, 0.90, 4),
-    ("Z5", 0.90, 1.01, 5),
+    ("Z5", 0.90, float("inf"), 5),
 ]
-
 # Por encima de esta variabilidad relativa el esfuerzo deja de considerarse estable
 # y la deriva cardíaca no es interpretable. Es un umbral heurístico, no un estándar.
 UMBRAL_VARIABILIDAD = 8.0
