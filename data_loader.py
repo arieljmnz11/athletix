@@ -37,9 +37,9 @@ MAPA_COLUMNAS_SYNC = {
     "Tiempo transcurrido": "tiempo_transcurrido_s",
     "Desnivel positivo": "desnivel_positivo_m",
     "Ritmo cardiaco promedio": "fc_promedio",
+    "Ritmo cardiaco máximo": "fc_maxima",
     "Velocidad promedio": "velocidad_promedio",
 }
-
 # Traducción de los tipos de deporte que devuelve la API (inglés) al formato del CSV (español)
 TIPOS_API_A_CSV = {
     "Run": "Carrera", "TrailRun": "Carrera", "VirtualRun": "Carrera",
@@ -111,6 +111,9 @@ def _json_a_formato_csv(actividades):
     salida["Tiempo transcurrido"] = df.get("elapsed_time")
     salida["Desnivel positivo"] = df.get("total_elevation_gain")
     salida["Ritmo cardiaco promedio"] = df.get("average_heartrate")
+    # El máximo por actividad es un suelo observado de la FC máxima real del atleta,
+    # más informado que una estimación por edad.
+    salida["Ritmo cardiaco máximo"] = df.get("max_heartrate")
     salida["Velocidad promedio"] = df.get("average_speed")
     return salida
 
@@ -227,7 +230,14 @@ def guardar_fc_manual(fecha_actividad, serie):
         return 0, f"No se pudo guardar la serie: {error}"
 
 def leer_fc_manual(fecha_actividad=None):
-    """Recupera las muestras de pulso cargadas a mano, de una actividad o de todas."""
+    """Recupera las muestras de pulso cargadas a mano, de una actividad o de todas.
+
+    Args:
+        fecha_actividad (str | None): Clave de la actividad, o None para leerlas todas.
+    Returns:
+        pd.DataFrame: Columnas 'fecha_actividad', 'tiempo_s' y 'fc_ppm', ordenadas
+            cronológicamente dentro de cada actividad.
+    """
     columnas_vacias = ["fecha_actividad", "tiempo_s", "fc_ppm"]
     try:
         filtro = "fecha_actividad" if fecha_actividad is not None else None
@@ -237,7 +247,11 @@ def leer_fc_manual(fecha_actividad=None):
         return pd.DataFrame(columns=columnas_vacias)
     if not filas:
         return pd.DataFrame(columns=columnas_vacias)
-    return pd.DataFrame(filas)[columnas_vacias]
+
+    # La lectura paginada ordena por id, que es el orden de inserción: al reescribir una
+    # serie las muestras nuevas quedan al final y np.diff daría duraciones negativas.
+    tabla = pd.DataFrame(filas)[columnas_vacias]
+    return tabla.sort_values(["fecha_actividad", "tiempo_s"]).reset_index(drop=True)
 
 def borrar_fc_manual(fecha_actividad):
     """Elimina todas las muestras de pulso cargadas para una actividad.
