@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 # Frecuencia cardíaca máxima estimada con la fórmula de Tanaka et al. (2001),
 # FCmax = 208 - 0.7 x edad, más ajustada que 220 - edad en personas entrenadas.
-FC_MAXIMA = 194
+FC_MAXIMA = 199
 
 # Streamlit Community Cloud ejecuta en UTC. Sin anclar la zona, entre las 19:00 y la
 # medianoche de Ecuador el servidor ya está en el día siguiente y las ventanas móviles
