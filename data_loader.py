@@ -13,6 +13,8 @@ import re
 import numpy as np
 import requests                               # Cliente HTTP para la API de Strava
 import metricas_fc
+import datetime as dt
+import config
 from dotenv import load_dotenv                # Carga del archivo .env local
 from supabase import create_client, Client    # Cliente de la base de datos en la nube
 
@@ -27,6 +29,8 @@ TAMANO_PAGINA = 1000
 TAMANO_LOTE_UPSERT = 500
 
 TABLA_SYNC = "actividades_sincronizadas"  # Tabla de Supabase que reemplaza al CSV incremental
+
+TABLA_AJUSTES = "ajustes"
 
 # Traduce entre el nombre de columna que usa el DataFrame interno y el de la tabla en Supabase
 MAPA_COLUMNAS_SYNC = {
@@ -302,6 +306,40 @@ def listar_actividades_sin_fc():
         "Fecha de la actividad", ascending=False
     )
 
+def leer_ajustes():
+    """Lee la fila única de ajustes personales.
+
+    Returns:
+        dict | None: Los ajustes guardados, o None si la tabla no responde o está vacía.
+    """
+    try:
+        respuesta = (_cliente_supabase()
+                     .table(TABLA_AJUSTES)
+                     .select("*")
+                     .eq("id", 1)
+                     .execute())
+    except Exception:
+        return None
+    return respuesta.data[0] if respuesta.data else None
+
+def guardar_ajustes(valores):
+    """Actualiza la fila única de ajustes.
+
+    Args:
+        valores (dict): Campos a modificar, con los nombres de columna de la tabla.
+    Returns:
+        bool: True si la escritura llegó a la base de datos.
+    """
+    datos = dict(valores)
+    # La marca de tiempo se escribe desde Python porque el valor por defecto de la
+    # columna solo se aplica al insertar, nunca al modificar una fila que ya existe.
+    datos["actualizado_en"] = dt.datetime.now(config.ZONA_HORARIA).isoformat()
+    try:
+        _cliente_supabase().table(TABLA_AJUSTES).update(datos).eq("id", 1).execute()
+        return True
+    except Exception:
+        return False
+    
 def sincronizar_con_strava(fecha_ultima_actividad=None):
     """
     Descarga de la API únicamente las actividades posteriores a la última que ya
