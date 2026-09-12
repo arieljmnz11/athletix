@@ -8,6 +8,7 @@ data_loader.py y metricas_fc.py.
 """
 
 import os
+from datetime import date
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -22,6 +23,7 @@ import modelo
 import agente
 import data_loader
 import metricas_fc
+import ajustes
 
 # En la nube las llaves llegan por Streamlit Secrets; load_dotenv solo aplica en local.
 load_dotenv()
@@ -152,8 +154,9 @@ dias_deporte = backend.dias_sin_entrenar(base_deporte)
 kpis = backend.calcular_kpis(datos)
 kpis_hoy = backend.calcular_kpis(base_deporte)
 
-tab_panel, tab_carga, tab_pred, tab_pulso, tab_hist = st.tabs(
-    ["📊 Panel", "🔥 Carga y Fatiga", "🎯 Predicción y Plan", "❤️ Pulso manual", "📚 Histórico"]
+tab_panel, tab_carga, tab_pred, tab_pulso, tab_hist, tab_ajustes = st.tabs(
+    ["📊 Panel", "🔥 Carga y Fatiga", "🎯 Predicción y Plan", "❤️ Pulso manual",
+     "📚 Histórico", "⚙️ Ajustes"]
 )
 
 with tab_panel:
@@ -679,3 +682,116 @@ if prompt := st.chat_input("Ej: ¿Qué entreno mañana? ¿Voy bien para bajar de
 
         except Exception as error:
             st.error(f"No se pudo consultar al agente: {error}")
+
+with tab_ajustes:
+    st.subheader("Ajustes personales")
+    st.caption("Se guardan en la base de datos, así que siguen puestos la próxima vez "
+               "que abras la aplicación.")
+
+    actuales = ajustes.leer()
+    col_perfil, col_fc = st.columns(2)
+
+    with col_perfil:
+        st.markdown("**Perfil**")
+        nacimiento = st.date_input(
+            "Fecha de nacimiento", value=actuales["fecha_nacimiento"],
+            min_value=date(1940, 1, 1), max_value=config.hoy(), format="DD/MM/YYYY",
+            help="De aquí sale la edad y, con ella, la estimación de Tanaka.")
+
+        edad_actual = ajustes.edad({"fecha_nacimiento": nacimiento})
+        if edad_actual is None:
+            st.caption("Sin fecha de nacimiento no se puede estimar la FC máxima por edad.")
+        else:
+            tanaka = ajustes.fc_maxima_tanaka({"fecha_nacimiento": nacimiento})
+            st.caption(f"Edad: {edad_actual} años. Tanaka estimaría {tanaka} ppm.")
+
+    with col_fc:
+        st.markdown("**Frecuencia cardíaca**")
+        fc_maxima_medida = st.number_input(
+            "FC máxima medida (ppm)", min_value=140, max_value=230,
+            value=actuales["fc_maxima_medida"], step=1,
+            help="El valor más alto que hayas alcanzado de verdad. Si lo dejas vacío se "
+                 "usa la estimación por edad, que tiene una desviación de varios latidos.")
+
+        fc_reposo = st.number_input(
+            "FC en reposo (ppm)", min_value=30, max_value=100,
+            value=actuales["fc_reposo"], step=1,
+            help="Mídela acostado antes de levantarte, varias mañanas, y usa el valor más "
+                 "bajo de una semana normal. Hace falta para Karvonen.")
+
+    activa, origen = ajustes.fc_maxima_efectiva(
+        {"fc_maxima_medida": fc_maxima_medida, "fecha_nacimiento": nacimiento})
+    procedencia = {"medida": "medida por ti", "tanaka": "estimada por edad",
+                   "respaldo": "de respaldo del código"}
+    st.info(f"La aplicación usará **{activa} ppm** como FC máxima, {procedencia[origen]}.")
+
+    modelo = st.radio(
+        "Modelo de zonas", ["fcmax", "karvonen"],
+        index=0 if actuales["modelo_zonas"] == "fcmax" else 1, horizontal=True,
+        format_func=lambda v: ("Porcentaje de FC máxima" if v == "fcmax"
+                               else "Karvonen, por reserva cardíaca"))
+
+    if modelo == "karvonen" and not fc_reposo:
+        st.warning("Karvonen necesita la FC en reposo. Mientras esté vacía se seguirá "
+                   "usando el porcentaje de FC máxima.")
+
+    previa = {"fc_maxima_medida": fc_maxima_medida, "fecha_nacimiento": nacimiento,
+              "fc_reposo": fc_reposo}
+    por_maxima = ajustes.rangos_de_zonas({**previa, "modelo_zonas": "fcmax"})
+    por_karvonen = ajustes.rangos_de_zonas({**previa, "modelo_zonas": "karvonen"})
+
+    comparativa = pd.DataFrame({
+        "Zona": [nombre for nombre, _, _ in por_maxima],
+        "% de FC máxima": [ajustes.texto_rango(r) for r in por_maxima],
+        "Karvonen": ([ajustes.texto_rango(r) for r in por_karvonen] if fc_reposo
+                     else ["—"] * len(por_maxima)),
+    })
+    st.dataframe(comparativa, width="stretch", hide_index=True)
+    st.caption("Los dos modelos se muestran siempre para que puedas compararlos antes de "
+               "decidir con cuál te quedas. Solo se aplica el que dejes seleccionado arriba.")
+
+    st.divider()
+    col_barra, col_agente = st.columns(2)
+
+    with col_barra:
+        st.markdown("**Arranque de la barra lateral**")
+        deporte_defecto = st.selectbox(
+            "Deporte al abrir", deportes,
+            index=ajustes.indice_por_defecto(actuales, "deporte_defecto", deportes))
+
+        opciones_periodo = ["Año actual", "Todo el histórico"] + [str(a) for a in años]
+        periodo_defecto = st.selectbox(
+            "Periodo al abrir", opciones_periodo,
+            index=(opciones_periodo.index(actuales["periodo_defecto"])
+                   if actuales["periodo_defecto"] in opciones_periodo else 0),
+            help="'Año actual' se recalcula solo cada enero. Un año concreto se queda fijo.")
+
+    with col_agente:
+        st.markdown("**Agente y diario**")
+        actividades_agente = st.slider(
+            "Actividades que recibe el agente", min_value=5, max_value=50,
+            value=int(actuales["actividades_agente"]), step=5,
+            help="Más contexto sube el costo y la latencia de cada respuesta.")
+
+        retencion_diario = st.number_input(
+            "Registros del diario que se conservan", min_value=7, max_value=365,
+            value=int(actuales["retencion_diario"]), step=1,
+            help="Son registros, no días naturales: si anotas tres veces por semana, "
+                 "treinta registros cubren unas diez semanas.")
+
+    st.divider()
+
+    if st.button("Guardar ajustes", type="primary", width="stretch"):
+        if ajustes.guardar({
+            "fecha_nacimiento": nacimiento,
+            "fc_maxima_medida": int(fc_maxima_medida) if fc_maxima_medida else None,
+            "fc_reposo": int(fc_reposo) if fc_reposo else None,
+            "modelo_zonas": modelo,
+            "deporte_defecto": deporte_defecto,
+            "periodo_defecto": periodo_defecto,
+            "actividades_agente": int(actividades_agente),
+            "retencion_diario": int(retencion_diario),
+        }):
+            st.success("Ajustes guardados.")
+        else:
+            st.error("No se pudieron guardar. Revisa la conexión con la base de datos.")
