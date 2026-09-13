@@ -707,11 +707,23 @@ with tab_ajustes:
 
     with col_fc:
         st.markdown("**Frecuencia cardíaca**")
-        fc_maxima_medida = st.number_input(
+
+        medida_guardada = actuales["fc_maxima_medida"]
+        origen_fcmax = st.radio(
+            "De dónde sale la FC máxima", ["Valor medido", "Estimación por edad"],
+            index=0 if medida_guardada else 1, horizontal=True,
+            help="Tanaka se desvía varios latidos de una persona a otra, así que un valor "
+                 "medido de verdad siempre manda sobre la fórmula.")
+
+        # El campo numérico nunca queda vacío porque Streamlit repone el último valor
+        # válido al borrarlo, así que quién manda lo decide el selector de arriba.
+        valor_medido = st.number_input(
             "FC máxima medida (ppm)", min_value=140, max_value=230,
-            value=actuales["fc_maxima_medida"], step=1,
-            help="El valor más alto que hayas alcanzado de verdad. Si lo dejas vacío se "
-                 "usa la estimación por edad, que tiene una desviación de varios latidos.")
+            value=medida_guardada or config.FC_MAXIMA, step=1,
+            disabled=(origen_fcmax == "Estimación por edad"),
+            help="El valor más alto que hayas alcanzado de verdad y hayas comprobado.")
+
+        fc_maxima_medida = valor_medido if origen_fcmax == "Valor medido" else None
 
         fc_reposo = st.number_input(
             "FC en reposo (ppm)", min_value=30, max_value=100,
@@ -740,15 +752,20 @@ with tab_ajustes:
     por_maxima = ajustes.rangos_de_zonas({**previa, "modelo_zonas": "fcmax"})
     por_karvonen = ajustes.rangos_de_zonas({**previa, "modelo_zonas": "karvonen"})
 
+    karvonen_activo = modelo == "karvonen" and bool(fc_reposo)
+    titulo_maxima = "% de FC máxima" + ("" if karvonen_activo else "  ← en uso")
+    titulo_karvonen = "Karvonen" + ("  ← en uso" if karvonen_activo else "")
+
     comparativa = pd.DataFrame({
         "Zona": [nombre for nombre, _, _ in por_maxima],
-        "% de FC máxima": [ajustes.texto_rango(r) for r in por_maxima],
-        "Karvonen": ([ajustes.texto_rango(r) for r in por_karvonen] if fc_reposo
-                     else ["—"] * len(por_maxima)),
+        titulo_maxima: [ajustes.texto_rango(r) for r in por_maxima],
+        titulo_karvonen: ([ajustes.texto_rango(r) for r in por_karvonen] if fc_reposo
+                          else ["—"] * len(por_maxima)),
     })
     st.dataframe(comparativa, width="stretch", hide_index=True)
-    st.caption("Los dos modelos se muestran siempre para que puedas compararlos antes de "
-               "decidir con cuál te quedas. Solo se aplica el que dejes seleccionado arriba.")
+    st.caption("Las dos columnas se muestran siempre para que puedan comparar. El "
+               "selector de arriba no cambia la tabla, marca cuál de las dos aplica la "
+               "aplicación.")
 
     st.divider()
     col_barra, col_agente = st.columns(2)
