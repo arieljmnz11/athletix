@@ -154,9 +154,9 @@ dias_deporte = backend.dias_sin_entrenar(base_deporte)
 kpis = backend.calcular_kpis(datos)
 kpis_hoy = backend.calcular_kpis(base_deporte)
 
-tab_panel, tab_carga, tab_pred, tab_pulso, tab_hist, tab_ajustes = st.tabs(
+tab_panel, tab_carga, tab_pred, tab_pulso, tab_hist, tab_agente, tab_ajustes = st.tabs(
     ["📊 Panel", "🔥 Carga y Fatiga", "🎯 Predicción y Plan", "❤️ Pulso manual",
-     "📚 Histórico", "⚙️ Ajustes"]
+     "📚 Histórico", "🤖 Coach AI", "⚙️ Ajustes"]
 )
 
 with tab_panel:
@@ -610,83 +610,82 @@ with tab_hist:
     st.caption("«Duración Minutos» es el tiempo en movimiento, que alimenta el cálculo de carga. "
                "«Tiempo total» incluye las paradas y es el que cuenta como marca oficial en competición.")
 
-st.divider()
-st.subheader("🤖 Coach AI")
+with tab_agente:
+    st.subheader("🤖 Coach AI")
 
-if "mensajes" not in st.session_state:
-    st.session_state.mensajes = agente.cargar_historial()
+    if "mensajes" not in st.session_state:
+        st.session_state.mensajes = agente.cargar_historial()
 
-cabecera, boton = st.columns([4, 1])
-cabecera.caption("El agente recibe tus indicadores, la predicción del modelo y tu diario de estado.")
+    cabecera, boton = st.columns([4, 1])
+    cabecera.caption("El agente recibe tus indicadores, la predicción del modelo y tu diario de estado.")
 
-if boton.button("🗑️ Borrar memoria", width="stretch"):
-    agente.borrar_historial()
-    st.session_state.mensajes = []
-    st.rerun()
+    if boton.button("🗑️ Borrar memoria", width="stretch"):
+        agente.borrar_historial()
+        st.session_state.mensajes = []
+        st.rerun()
 
-# La conversación se confina a un contenedor de altura fija con desplazamiento propio,
-# para que el historial no alargue la página. Por defecto solo se muestran los últimos
-# intercambios, de modo que la pregunta más reciente quede siempre a la vista.
-MENSAJES_VISIBLES = 6
-total_mensajes = len(st.session_state.mensajes)
+    # La conversación se confina a un contenedor de altura fija con desplazamiento propio,
+    # para que el historial no alargue la página. Por defecto solo se muestran los últimos
+    # intercambios, de modo que la pregunta más reciente quede siempre a la vista.
+    MENSAJES_VISIBLES = 6
+    total_mensajes = len(st.session_state.mensajes)
 
-ver_todo = st.checkbox(f"Ver conversación completa ({total_mensajes} mensajes)",
-                       value=False, disabled=total_mensajes <= MENSAJES_VISIBLES)
+    ver_todo = st.checkbox(f"Ver conversación completa ({total_mensajes} mensajes)",
+                           value=False, disabled=total_mensajes <= MENSAJES_VISIBLES)
 
-visibles = st.session_state.mensajes if ver_todo else st.session_state.mensajes[-MENSAJES_VISIBLES:]
+    visibles = st.session_state.mensajes if ver_todo else st.session_state.mensajes[-MENSAJES_VISIBLES:]
 
-ventana_chat = st.container(height=420)
-with ventana_chat:
-    for mensaje in visibles:
-        with st.chat_message(mensaje["role"]):
-            st.markdown(mensaje["content"])
-
-# Un chat_input suelto en la raíz del script queda anclado al fondo de la ventana y
-# recibe el foco, lo que arrastra la página hacia abajo en cada recarga. Dentro de un
-# contenedor se comporta como un control normal y se queda en su sitio.
-entrada_chat = st.container()
-
-if prompt := entrada_chat.chat_input("Ej: ¿Qué entreno mañana? ¿Voy bien para bajar de 50 min en 10K?"):
-
-    st.session_state.mensajes.append({"role": "user", "content": prompt})
+    ventana_chat = st.container(height=420)
     with ventana_chat:
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        for mensaje in visibles:
+            with st.chat_message(mensaje["role"]):
+                st.markdown(mensaje["content"])
 
-    if not API_KEY_CLAUDE:
-        st.error("Falta 'ANTHROPIC_API_KEY'. Añádela al .env en local o a los Secrets de Streamlit Cloud.")
-    else:
-        try:
-            cliente = anthropic.Anthropic(api_key=API_KEY_CLAUDE)
+    entrada_chat = st.container()
 
-            entrenamiento_ctx = modelo.entrenar_modelo(datos_completos)
-            metricas_ctx = modelo.metricas_ultimo_bloque(datos_completos)
-            prediccion_ctx = None
+    if prompt := entrada_chat.chat_input(
+            "Ej: ¿Qué entreno mañana? ¿Voy bien para bajar de 50 min en 10K?"):
 
-            if entrenamiento_ctx and metricas_ctx:
-                ritmo_ctx = modelo.predecir_ritmo(entrenamiento_ctx, metricas_ctx)
-                prediccion_ctx = {
-                    "ritmo": ritmo_ctx,
-                    "distancia": 10.0,
-                    "tiempo_texto": modelo.formatear_tiempo(modelo.ritmo_a_tiempo(ritmo_ctx, 10.0)),
-                }
+        st.session_state.mensajes.append({"role": "user", "content": prompt})
+        with ventana_chat:
+            with st.chat_message("user"):
+                st.markdown(prompt)
 
-            contexto = agente.construir_contexto(
-                kpis_hoy, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
-                actividades_recientes=backend.ultimas_actividades(datos_completos, 20),
-            )
+        if not API_KEY_CLAUDE:
+            st.error("Falta 'ANTHROPIC_API_KEY'. Añádela al .env en local o a los Secrets de Streamlit Cloud.")
+        else:
+            try:
+                cliente = anthropic.Anthropic(api_key=API_KEY_CLAUDE)
 
-            with ventana_chat:
-                with st.chat_message("assistant"):
-                    with st.spinner("Analizando tus datos..."):
-                        texto = agente.consultar_agente(cliente, contexto, st.session_state.mensajes)
-                    st.markdown(texto)
+                entrenamiento_ctx = modelo.entrenar_modelo(datos_completos)
+                metricas_ctx = modelo.metricas_ultimo_bloque(datos_completos)
+                prediccion_ctx = None
 
-            st.session_state.mensajes.append({"role": "assistant", "content": texto})
-            agente.guardar_historial(st.session_state.mensajes)
+                if entrenamiento_ctx and metricas_ctx:
+                    ritmo_ctx = modelo.predecir_ritmo(entrenamiento_ctx, metricas_ctx)
+                    prediccion_ctx = {
+                        "ritmo": ritmo_ctx,
+                        "distancia": 10.0,
+                        "tiempo_texto": modelo.formatear_tiempo(modelo.ritmo_a_tiempo(ritmo_ctx, 10.0)),
+                    }
 
-        except Exception as error:
-            st.error(f"No se pudo consultar al agente: {error}")
+                contexto = agente.construir_contexto(
+                    kpis_hoy, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
+                    actividades_recientes=backend.ultimas_actividades(datos_completos, 20),
+                )
+
+                with ventana_chat:
+                    with st.chat_message("assistant"):
+                        with st.spinner("Analizando tus datos..."):
+                            texto = agente.consultar_agente(cliente, contexto, st.session_state.mensajes)
+                        st.markdown(texto)
+
+                st.session_state.mensajes.append({"role": "assistant", "content": texto})
+                agente.guardar_historial(st.session_state.mensajes)
+
+            except Exception as error:
+                st.error(f"No se pudo consultar al agente: {error}")
+
 
 with tab_ajustes:
     st.subheader("Ajustes personales")
@@ -740,15 +739,15 @@ with tab_ajustes:
         {"fc_maxima_medida": fc_maxima_medida, "fecha_nacimiento": nacimiento})
     procedencia = {"medida": "medida por ti", "tanaka": "estimada por edad",
                    "respaldo": "de respaldo del código"}
-    st.info(f"La aplicación usará **{activa} ppm** como FC máxima, {procedencia[origen]}.")
+    st.info(f"Athletix usará **{activa} ppm** como FC máxima, {procedencia[origen]}.")
 
-    modelo = st.radio(
+    modelo_zonas = st.radio(
         "Modelo de zonas", ["fcmax", "karvonen"],
         index=0 if actuales["modelo_zonas"] == "fcmax" else 1, horizontal=True,
         format_func=lambda v: ("Porcentaje de FC máxima" if v == "fcmax"
                                else "Karvonen, por reserva cardíaca"))
 
-    if modelo == "karvonen" and not fc_reposo:
+    if modelo_zonas == "karvonen" and not fc_reposo:
         st.warning("Karvonen necesita la FC en reposo. Mientras esté vacía se seguirá "
                    "usando el porcentaje de FC máxima.")
 
@@ -757,7 +756,7 @@ with tab_ajustes:
     por_maxima = ajustes.rangos_de_zonas({**previa, "modelo_zonas": "fcmax"})
     por_karvonen = ajustes.rangos_de_zonas({**previa, "modelo_zonas": "karvonen"})
 
-    karvonen_activo = modelo == "karvonen" and bool(fc_reposo)
+    karvonen_activo = modelo_zonas == "karvonen" and bool(fc_reposo)
     titulo_maxima = "% de FC máxima" + ("" if karvonen_activo else "  ← en uso")
     titulo_karvonen = "Karvonen" + ("  ← en uso" if karvonen_activo else "")
 
@@ -768,9 +767,9 @@ with tab_ajustes:
                           else ["—"] * len(por_maxima)),
     })
     st.dataframe(comparativa, width="stretch", hide_index=True)
-    st.caption("Las dos columnas se muestran siempre para que puedan comparar. El "
-               "selector de arriba no cambia la tabla, marca cuál de las dos aplica la "
-               "aplicación.")
+    st.caption("Las dos columnas se muestran siempre para que se puedan comparar. El "
+               "selector de arriba no cambia la tabla, marca cuál de las dos aplica "
+               "Athletix.")
 
     st.divider()
     col_barra, col_agente = st.columns(2)
@@ -808,7 +807,7 @@ with tab_ajustes:
             "fecha_nacimiento": nacimiento,
             "fc_maxima_medida": int(fc_maxima_medida) if fc_maxima_medida else None,
             "fc_reposo": int(fc_reposo) if fc_reposo else None,
-            "modelo_zonas": modelo,
+            "modelo_zonas": modelo_zonas,
             "deporte_defecto": deporte_defecto,
             "periodo_defecto": periodo_defecto,
             "actividades_agente": int(actividades_agente),
