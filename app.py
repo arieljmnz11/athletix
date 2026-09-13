@@ -641,7 +641,12 @@ with ventana_chat:
         with st.chat_message(mensaje["role"]):
             st.markdown(mensaje["content"])
 
-if prompt := st.chat_input("Ej: ¿Qué entreno mañana? ¿Voy bien para bajar de 50 min en 10K?"):
+# Un chat_input suelto en la raíz del script queda anclado al fondo de la ventana y
+# recibe el foco, lo que arrastra la página hacia abajo en cada recarga. Dentro de un
+# contenedor se comporta como un control normal y se queda en su sitio.
+entrada_chat = st.container()
+
+if prompt := entrada_chat.chat_input("Ej: ¿Qué entreno mañana? ¿Voy bien para bajar de 50 min en 10K?"):
 
     st.session_state.mensajes.append({"role": "user", "content": prompt})
     with ventana_chat:
