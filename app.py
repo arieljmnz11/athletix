@@ -87,14 +87,24 @@ if datos_completos is None or datos_completos.empty:
              "repositorio o sincroniza con Strava desde el panel lateral.")
     st.stop()
 
+# Los ajustes se leen una sola vez por recarga y se reparten desde aquí, para que
+# ninguna pestaña se invente su propia frecuencia cardíaca máxima.
+ajustes_usuario = ajustes.leer()
+fc_maxima_activa, origen_fcmax = ajustes.fc_maxima_efectiva(ajustes_usuario)
+
 with st.sidebar:
     st.header("⚙️ Controles")
 
     deportes = ["Carrera", "Bicicleta", "Todo"]
-    deporte = st.radio("Deporte", deportes, index=0)
+    deporte = st.radio(
+        "Deporte", deportes,
+        index=ajustes.indice_por_defecto(ajustes_usuario, "deporte_defecto", deportes))
 
     años = sorted(datos_completos["Año"].unique(), reverse=True)
-    año = st.selectbox("Periodo", ["Todo el histórico"] + [str(a) for a in años])
+    opciones_año = ["Todo el histórico"] + [str(a) for a in años]
+    año = st.selectbox(
+        "Periodo", opciones_año,
+        index=ajustes.indice_por_defecto(ajustes_usuario, "periodo_defecto", opciones_año))
 
     st.divider()
     st.subheader("🔄 Sincronización")
@@ -124,7 +134,8 @@ with st.sidebar:
     nota_hoy = st.text_input("Nota (opcional)", placeholder="Ej: molestia en el gemelo")
 
     if st.button("Registrar estado de hoy", width="stretch"):
-        agente.registrar_estado(estado_hoy, nota_hoy)
+        agente.registrar_estado(estado_hoy, nota_hoy,
+                                ajustes_usuario["retencion_diario"])
         st.success("Estado registrado.")
 
 datos = datos_completos.copy()
@@ -438,9 +449,10 @@ with tab_pulso:
             format_func=lambda c: etiqueta_actividad(c, tipos.get(c, ""), c in claves_con_serie),
         )
 
-        fc_maxima = st.number_input(
-            "Frecuencia cardíaca máxima de referencia (ppm)",
-            min_value=140, max_value=220, value=config.FC_MAXIMA, step=1)
+        # La referencia sale de Ajustes: tener un control propio aquí permitía que esta
+        # pestaña y el resto de Athletix calcularan zonas sobre números distintos.
+        st.caption(f"Zonas calculadas sobre una FC máxima de **{fc_maxima_activa} ppm**, "
+                   f"{ajustes.ORIGEN_FCMAX[origen_fcmax]}. Se cambia en Ajustes.")
 
         existente = data_loader.leer_fc_manual(clave)
 
@@ -492,7 +504,7 @@ with tab_pulso:
             else:
                 tiempos = vista_serie["tiempo_s"].to_numpy(dtype=float)
                 pulsos = vista_serie["fc_ppm"].to_numpy(dtype=float)
-                indicadores = metricas_fc.resumen_serie(tiempos, pulsos, fc_maxima)
+                indicadores = metricas_fc.resumen_serie(tiempos, pulsos, fc_maxima_activa)
 
                 v1, v2, v3 = st.columns(3)
                 v1.metric("Muestras", indicadores["muestras"])
@@ -502,7 +514,7 @@ with tab_pulso:
                                "no según cuántas muestras contiene.")
                 v3.metric("FC máxima", f"{indicadores['fc_maxima']:.0f} ppm")
 
-                if indicadores["fc_maxima"] and indicadores["fc_maxima"] > fc_maxima:
+                if indicadores["fc_maxima"] and indicadores["fc_maxima"] > fc_maxima_activa:
                     st.warning("Esta serie supera la referencia máxima indicada arriba. Súbela o las "
                                "zonas quedarán comprimidas hacia Z5.")
 
@@ -606,7 +618,7 @@ with tab_hist:
 
     st.divider()
     st.subheader("Últimas actividades")
-    st.dataframe(backend.ultimas_actividades(datos, 10), width="stretch", hide_index=True)
+    st.dataframe(backend.ultimas_actividades(datos, 10, fc_maxima_activa), width="stretch", hide_index=True)
     st.caption("«Duración Minutos» es el tiempo en movimiento, que alimenta el cálculo de carga. "
                "«Tiempo total» incluye las paradas y es el que cuenta como marca oficial en competición.")
 
@@ -671,7 +683,9 @@ with tab_agente:
 
                 contexto = agente.construir_contexto(
                     kpis_hoy, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
-                    actividades_recientes=backend.ultimas_actividades(datos_completos, 20),
+                    actividades_recientes=backend.ultimas_actividades(
+                    datos_completos, ajustes_usuario["actividades_agente"],
+                    fc_maxima_activa),
                 )
 
                 with ventana_chat:
@@ -692,7 +706,10 @@ with tab_ajustes:
     st.caption("Se guardan en la base de datos, así que siguen puestos la próxima vez "
                "que abras la aplicación.")
 
-    actuales = ajustes.leer()
+    if st.session_state.pop("ajustes_guardados", False):
+        st.success("Ajustes guardados.")
+
+    actuales = ajustes_usuario
     col_perfil, col_fc = st.columns(2)
 
     with col_perfil:
@@ -737,9 +754,7 @@ with tab_ajustes:
 
     activa, origen = ajustes.fc_maxima_efectiva(
         {"fc_maxima_medida": fc_maxima_medida, "fecha_nacimiento": nacimiento})
-    procedencia = {"medida": "medida por ti", "tanaka": "estimada por edad",
-                   "respaldo": "de respaldo del código"}
-    st.info(f"Athletix usará **{activa} ppm** como FC máxima, {procedencia[origen]}.")
+    st.info(f"Athletix usará **{activa} ppm** como FC máxima, {ajustes.ORIGEN_FCMAX[origen]}.")
 
     modelo_zonas = st.radio(
         "Modelo de zonas", ["fcmax", "karvonen"],
@@ -813,6 +828,9 @@ with tab_ajustes:
             "actividades_agente": int(actividades_agente),
             "retencion_diario": int(retencion_diario),
         }):
-            st.success("Ajustes guardados.")
+            # Se recarga la página entera para que la barra lateral y las demás pestañas
+            # recojan los valores nuevos ya mismo, y no en la siguiente interacción.
+            st.session_state.ajustes_guardados = True
+            st.rerun()
         else:
             st.error("No se pudieron guardar. Revisa la conexión con la base de datos.")
