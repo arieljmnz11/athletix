@@ -65,7 +65,7 @@ def cargar_diario():
     except Exception:
         return []
 
-def registrar_estado(estado, nota=""):
+def registrar_estado(estado, nota="", retencion=None):
     """
     Añade o actualiza el estado físico del día en el diario. Este dato se inyecta
     después como hecho estructurado, en lugar de confiar en que el modelo lo
@@ -79,9 +79,10 @@ def registrar_estado(estado, nota=""):
         cliente.table("diario_estado").upsert(
             {"fecha": hoy, "estado": estado, "nota": nota}, on_conflict="fecha"
         ).execute()
-        # Conserva solo el último mes de registros, igual que antes
+        # Se conserva un número de registros, no de días naturales: si se anota tres
+        # veces por semana, treinta registros cubren unas diez semanas.
         respuesta = cliente.table("diario_estado").select("fecha").order("fecha", desc=True).execute()
-        fechas_a_borrar = [f["fecha"] for f in respuesta.data[RETENCION_DIARIO:]]
+        fechas_a_borrar = [f["fecha"] for f in respuesta.data[retencion or RETENCION_DIARIO:]]
         if fechas_a_borrar:
             cliente.table("diario_estado").delete().in_("fecha", fechas_a_borrar).execute()
     except Exception:
