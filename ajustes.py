@@ -25,6 +25,13 @@ RESPALDO = {
     "retencion_diario": 30,
 }
 
+# Se centraliza aquí porque el origen de la FC máxima se muestra en dos pantallas y
+# tenerlo duplicado acabaría con una diciendo una cosa y la otra diciendo otra.
+ORIGEN_FCMAX = {
+    "medida": "medida por ti",
+    "tanaka": "estimada por tu edad",
+    "respaldo": "de respaldo del código",
+}
 
 def completar(guardados):
     """Rellena con los valores de respaldo los campos que la base de datos no traiga.
