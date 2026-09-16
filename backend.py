@@ -396,8 +396,17 @@ def resumen_por_tipo(df):
 
     return resumen.reset_index(drop=True)                                          # Reindexa el resultado final
 
-def ultimas_actividades(df, n=10):
-    """Devuelve las últimas n actividades con las columnas ya formateadas."""
+def ultimas_actividades(df, n=10, fc_maxima=None):
+    """Devuelve las últimas n actividades con las columnas ya formateadas.
+
+    Args:
+        df (pd.DataFrame): Actividades ya procesadas.
+        n (int): Cuántas devolver, de la más reciente hacia atrás.
+        fc_maxima (int | None): Referencia para la zona media. Si es None se recurre
+            al respaldo de config, porque el backend no lee los ajustes del usuario.
+    Returns:
+        pd.DataFrame: Tabla lista para mostrar o para pasarle al agente.
+    """
     if df.empty:                                                                   # Sin datos no hay tabla
         return pd.DataFrame()                                                      # Devuelve un DataFrame vacío
 
@@ -410,8 +419,9 @@ def ultimas_actividades(df, n=10):
 
     # La zona se deriva de la FC media, que resume la sesión pero no describe su reparto:
     # una sesión de series puede promediar Z3 sin haber estado nunca en esa zona.
+    referencia = fc_maxima or config.FC_MAXIMA
     tabla["Zona media"] = tabla["Ritmo cardiaco promedio"].apply(
-        lambda fc: metricas_fc.zona_de_pulso(fc, config.FC_MAXIMA) or "—")
+        lambda fc: metricas_fc.zona_de_pulso(fc, referencia) or "—")
 
     # El ritmo (min/km) describe bien la carrera, pero en ciclismo la métrica
     # interpretable es la velocidad media, así que se muestra una u otra según el deporte.
