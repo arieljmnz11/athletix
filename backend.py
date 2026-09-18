@@ -396,7 +396,7 @@ def resumen_por_tipo(df):
 
     return resumen.reset_index(drop=True)                                          # Reindexa el resultado final
 
-def ultimas_actividades(df, n=10, fc_maxima=None):
+def ultimas_actividades(df, n=10, fc_maxima=None, tiempo_legible=True):
     """Devuelve las últimas n actividades con las columnas ya formateadas.
 
     Args:
@@ -404,40 +404,48 @@ def ultimas_actividades(df, n=10, fc_maxima=None):
         n (int): Cuántas devolver, de la más reciente hacia atrás.
         fc_maxima (int | None): Referencia para la zona media. Si es None se recurre
             al respaldo de config, porque el backend no lee los ajustes del usuario.
+        tiempo_legible (bool): True formatea el tiempo en movimiento como '1h25min'
+            para mostrarlo en pantalla; False lo deja en minutos numéricos para que
+            el agente pueda sumarlo y compararlo.
     Returns:
         pd.DataFrame: Tabla lista para mostrar o para pasarle al agente.
     """
-    if df.empty:                                                                   # Sin datos no hay tabla
-        return pd.DataFrame()                                                      # Devuelve un DataFrame vacío
+    if df.empty:
+        return pd.DataFrame()
 
-    tabla = df.tail(n).sort_values("Fecha", ascending=False).copy()                # Toma las más recientes primero
-    tabla["Fecha"] = tabla["Fecha"].dt.strftime("%d/%m/%Y")                        # Formatea la fecha de forma legible
+    tabla = df.tail(n).sort_values("Fecha", ascending=False).copy()
+    tabla["Fecha"] = tabla["Fecha"].dt.strftime("%d/%m/%Y")
 
-    # El tiempo transcurrido se guarda ya formateado porque es el dato que interesa
-    # leer de un vistazo; el de movimiento se conserva numérico para el agente.
+    # El tiempo transcurrido llega en segundos, que es lo que espera el formateador.
     tabla["Tiempo total"] = tabla["Tiempo transcurrido"].apply(formatear_duracion_corta)
 
+    referencia = fc_maxima or config.FC_MAXIMA
     # La zona se deriva de la FC media, que resume la sesión pero no describe su reparto:
     # una sesión de series puede promediar Z3 sin haber estado nunca en esa zona.
-    referencia = fc_maxima or config.FC_MAXIMA
     tabla["Zona media"] = tabla["Ritmo cardiaco promedio"].apply(
         lambda fc: metricas_fc.zona_de_pulso(fc, referencia) or "—")
 
     # El ritmo (min/km) describe bien la carrera, pero en ciclismo la métrica
     # interpretable es la velocidad media, así que se muestra una u otra según el deporte.
-    es_bici = tabla["Tipo de actividad"] == "Bicicleta"                            # Identifica las salidas en bicicleta
-    tabla.loc[es_bici, "Ritmo (min/km)"] = np.nan                                  # Oculta el ritmo en ciclismo
-    tabla.loc[~es_bici, "Velocidad (km/h)"] = np.nan                               # Oculta la velocidad en el resto
+    es_bici = tabla["Tipo de actividad"] == "Bicicleta"
+    tabla.loc[es_bici, "Ritmo (min/km)"] = np.nan
+    tabla.loc[~es_bici, "Velocidad (km/h)"] = np.nan
 
-    columnas = ["Fecha", "Tipo de actividad", "Distancia_km", "Minutos",           # Columnas relevantes para el usuario
-                "Tiempo total", "Desnivel positivo", "Ritmo cardiaco promedio", 
+    columnas = ["Fecha", "Tipo de actividad", "Distancia_km", "Minutos",
+                "Tiempo total", "Desnivel positivo", "Ritmo cardiaco promedio",
                 "Zona media", "Ritmo (min/km)", "Velocidad (km/h)", "Carga"]
-    
-    tabla = tabla[columnas].round(1)                                               # Redondea para evitar decimales largos
-    tabla["Ritmo (min/km)"] = tabla["Ritmo (min/km)"].apply(formatear_ritmo)       # Convierte el ritmo a min:seg
 
-    return tabla.rename(columns={"Distancia_km": "Km", "Minutos": "Duración Minutos",           # Nombres cortos para la tabla
+    tabla = tabla[columnas].round(1)
+    tabla["Ritmo (min/km)"] = tabla["Ritmo (min/km)"].apply(formatear_ritmo)
+
+    if tiempo_legible:
+        # Se reconstruyen los segundos antes de formatear: aplicar el formateador
+        # directo sobre 'Minutos' lo dividiría entre sesenta una segunda vez.
+        tabla["Minutos"] = (tabla["Minutos"] * 60).apply(formatear_duracion_corta)
+
+    nombre_movimiento = "Tiempo en movimiento" if tiempo_legible else "Duración Minutos"
+    return tabla.rename(columns={"Distancia_km": "Km", "Minutos": nombre_movimiento,
                                  "Desnivel positivo": "D+ (m)",
-                                 "Ritmo (min/km)": "Ritmo (min:s/km)",
-                                 "Velocidad (km/h)": "Velocidad (km/h)",
+                                 "Ritmo (min/km)": "Ritmo min/km",
+                                 "Velocidad (km/h)": "Velocidad km/h",
                                  "Ritmo cardiaco promedio": "FC media"})
