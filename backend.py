@@ -396,14 +396,15 @@ def resumen_por_tipo(df):
 
     return resumen.reset_index(drop=True)                                          # Reindexa el resultado final
 
-def ultimas_actividades(df, n=10, fc_maxima=None, tiempo_legible=True):
+def ultimas_actividades(df, n=10, limites_zonas=None, tiempo_legible=True):
     """Devuelve las últimas n actividades con las columnas ya formateadas.
 
     Args:
         df (pd.DataFrame): Actividades ya procesadas.
         n (int): Cuántas devolver, de la más reciente hacia atrás.
-        fc_maxima (int | None): Referencia para la zona media. Si es None se recurre
-            al respaldo de config, porque el backend no lee los ajustes del usuario.
+        limites_zonas (list | None): Zonas ya en pulsaciones para clasificar la FC
+            media. Si es None se derivan del respaldo de config, porque el backend
+            no lee los ajustes del usuario.
         tiempo_legible (bool): True formatea el tiempo en movimiento como '1h25min'
             para mostrarlo en pantalla; False lo deja en minutos numéricos para que
             el agente pueda sumarlo y compararlo.
@@ -419,11 +420,9 @@ def ultimas_actividades(df, n=10, fc_maxima=None, tiempo_legible=True):
     # El tiempo transcurrido llega en segundos, que es lo que espera el formateador.
     tabla["Tiempo total"] = tabla["Tiempo transcurrido"].apply(formatear_duracion_corta)
 
-    referencia = fc_maxima or config.FC_MAXIMA
-    # La zona se deriva de la FC media, que resume la sesión pero no describe su reparto:
-    # una sesión de series puede promediar Z3 sin haber estado nunca en esa zona.
+    limites = limites_zonas or metricas_fc.limites_en_pulsaciones(config.FC_MAXIMA)
     tabla["Zona media"] = tabla["Ritmo cardiaco promedio"].apply(
-        lambda fc: metricas_fc.zona_de_pulso(fc, referencia) or "—")
+        lambda fc: metricas_fc.zona_de_pulso(fc, limites) or "—")
 
     # El ritmo (min/km) describe bien la carrera, pero en ciclismo la métrica
     # interpretable es la velocidad media, así que se muestra una u otra según el deporte.
