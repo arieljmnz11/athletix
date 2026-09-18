@@ -92,6 +92,8 @@ if datos_completos is None or datos_completos.empty:
 ajustes_usuario = ajustes.leer()
 fc_maxima_activa, origen_fcmax = ajustes.fc_maxima_efectiva(ajustes_usuario)
 
+limites_zonas = ajustes.rangos_de_zonas(ajustes_usuario)
+
 with st.sidebar:
     st.header("⚙️ Controles")
 
@@ -452,10 +454,12 @@ with tab_pulso:
             format_func=lambda c: etiqueta_actividad(c, tipos.get(c, ""), c in claves_con_serie),
         )
 
-        # La referencia sale de Ajustes: tener un control propio aquí permitía que esta
-        # pestaña y el resto de Athletix calcularan zonas sobre números distintos.
-        st.caption(f"Zonas calculadas sobre una FC máxima de **{fc_maxima_activa} ppm**, "
-                   f"{ajustes.ORIGEN_FCMAX[origen_fcmax]}. Se cambia en Ajustes.")
+        modelo_texto = ("Karvonen, sobre tu reserva cardíaca"
+                        if ajustes.usa_karvonen(ajustes_usuario)
+                        else "porcentaje de FC máxima")
+        st.caption(f"Zonas por {modelo_texto}, con una FC máxima de "
+                   f"**{fc_maxima_activa} ppm** {ajustes.ORIGEN_FCMAX[origen_fcmax]}. "
+                   f"Se cambia en Ajustes.")
 
         existente = data_loader.leer_fc_manual(clave)
 
@@ -507,7 +511,8 @@ with tab_pulso:
             else:
                 tiempos = vista_serie["tiempo_s"].to_numpy(dtype=float)
                 pulsos = vista_serie["fc_ppm"].to_numpy(dtype=float)
-                indicadores = metricas_fc.resumen_serie(tiempos, pulsos, fc_maxima_activa)
+                indicadores = metricas_fc.resumen_serie(tiempos, pulsos,
+                                                        fc_maxima_activa, limites_zonas)
 
                 v1, v2, v3 = st.columns(3)
                 v1.metric("Muestras", indicadores["muestras"])
@@ -621,7 +626,8 @@ with tab_hist:
 
     st.divider()
     st.subheader("Últimas actividades")
-    st.dataframe(backend.ultimas_actividades(datos, 10, fc_maxima_activa), width="stretch", hide_index=True)
+    st.dataframe(backend.ultimas_actividades(datos, 10, limites_zonas),
+                 width="stretch", hide_index=True)
     st.caption("«Tiempo en movimiento» alimenta el cálculo de carga. «Tiempo total» "
                "incluye las paradas y es el que cuenta como marca oficial en competición.")
 
@@ -686,9 +692,9 @@ with tab_agente:
 
                 contexto = agente.construir_contexto(
                     kpis_hoy, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
-                    actividades_recientes=backend.ultimas_actividades(
+                actividades_recientes = backend.ultimas_actividades(
                     datos_completos, ajustes_usuario["actividades_agente"],
-                    fc_maxima_activa, tiempo_legible=False),
+                    limites_zonas, tiempo_legible=False),
                 )
 
                 with ventana_chat:
