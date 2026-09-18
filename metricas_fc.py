@@ -9,11 +9,13 @@ alojarlos en cualquiera de las dos crearía una dependencia circular entre ambas
 
 import numpy as np
 
-# Modelo de cinco zonas por porcentaje de la frecuencia cardíaca máxima. El cuarto
-# valor es el multiplicador del TRIMP de Edwards (1993): un minuto en zona 5 aporta
-# cinco veces más carga que uno en zona 1.
-# La Z5 no lleva tope: con una FCmax de referencia por debajo de la real, un límite
-# cerrado descartaba en silencio todo el tiempo que la superaba.
+# Fronteras de las cinco zonas como fracción del rango de intensidad. El cuarto valor
+# es el multiplicador del TRIMP de Edwards (1993): un minuto en zona 5 aporta cinco
+# veces más carga que uno en zona 1.
+# Estos porcentajes no se configuran desde la interfaz. El TRIMP de Edwards está
+# definido sobre ellos y moverlos daría otra métrica, ya no comparable con la
+# literatura. Lo configurable es sobre qué se aplican, y de eso se ocupa
+# limites_en_pulsaciones.
 ZONAS = [
     ("Z1", 0.50, 0.60, 1),
     ("Z2", 0.60, 0.70, 2),
@@ -21,6 +23,7 @@ ZONAS = [
     ("Z4", 0.80, 0.90, 4),
     ("Z5", 0.90, float("inf"), 5),
 ]
+
 # Por encima de esta variabilidad relativa el esfuerzo deja de considerarse estable
 # y la deriva cardíaca no es interpretable. Es un umbral heurístico, no un estándar.
 UMBRAL_VARIABILIDAD = 8.0
@@ -31,6 +34,28 @@ def _intervalos(tiempos, pulsos):
     if len(tiempos) < 2:
         return np.array([]), np.array([])
     return np.diff(tiempos), (pulsos[:-1] + pulsos[1:]) / 2
+
+
+def limites_en_pulsaciones(fc_maxima, fc_reposo=0):
+    """Traduce las cinco zonas de porcentajes a pulsaciones.
+
+    Con el reposo en cero el porcentaje se aplica sobre la frecuencia máxima. Con un
+    reposo real se aplica sobre la reserva cardíaca, o sea el rango entre reposo y
+    máximo, y se le suma el reposo: ese es el método de Karvonen (1957). La segunda
+    fórmula se reduce a la primera cuando el reposo vale cero, así que las dos
+    comparten un solo cálculo y no pueden contradecirse.
+
+    Args:
+        fc_maxima (float): Frecuencia cardíaca máxima del atleta.
+        fc_reposo (float): Frecuencia en reposo, o 0 para el modelo por porcentaje.
+    Returns:
+        list[tuple[str, float, float]]: Nombre, pulso inicial y pulso final de cada
+            zona. El final de la Z5 es infinito porque esa zona no tiene tope.
+    """
+    reposo = float(fc_reposo or 0)
+    reserva = float(fc_maxima) - reposo
+    return [(nombre, reposo + reserva * bajo, reposo + reserva * alto)
+            for nombre, bajo, alto, _ in ZONAS]
 
 
 def media_ponderada_por_tiempo(tiempos, pulsos):
@@ -50,35 +75,41 @@ def media_ponderada_por_tiempo(tiempos, pulsos):
     return float((medios * duraciones).sum() / total)
 
 
-def tiempo_en_zonas(tiempos, pulsos, fc_maxima):
+def tiempo_en_zonas(tiempos, pulsos, limites):
     """Reparte la duración de la actividad entre las cinco zonas de intensidad.
 
-    El tiempo por debajo del 50 % de la frecuencia máxima queda fuera del reparto,
-    tal como define el modelo, así que la suma de las zonas puede ser menor que la
-    duración total de la sesión.
+    El tiempo por debajo del inicio de la zona 1 queda fuera del reparto, tal como
+    define el modelo, así que la suma de las zonas puede ser menor que la duración
+    total de la sesión.
 
     Args:
         tiempos (np.ndarray): Segundos transcurridos en cada muestra.
         pulsos (np.ndarray): Pulsaciones registradas.
-        fc_maxima (float): Referencia de frecuencia cardíaca máxima del atleta.
+        limites (list): Salida de limites_en_pulsaciones, ya en pulsaciones.
     Returns:
         dict[str, float]: Segundos acumulados en cada zona.
     """
-    reparto = {nombre: 0.0 for nombre, _, _, _ in ZONAS}
+    reparto = {nombre: 0.0 for nombre, _, _ in limites}
     duraciones, medios = _intervalos(tiempos, pulsos)
-    if duraciones.size == 0 or not fc_maxima:
+    if duraciones.size == 0:
         return reparto
 
-    proporciones = medios / float(fc_maxima)
-    for nombre, bajo, alto, _ in ZONAS:
-        en_zona = (proporciones >= bajo) & (proporciones < alto)
+    for nombre, desde, hasta in limites:
+        en_zona = (medios >= desde) & (medios < hasta)
         reparto[nombre] = float(duraciones[en_zona].sum())
     return reparto
 
 
 def trimp_edwards(tiempos, pulsos, fc_maxima):
-    """Suma los minutos de cada zona ponderados por su multiplicador de intensidad."""
-    reparto = tiempo_en_zonas(tiempos, pulsos, fc_maxima)
+    """Suma los minutos de cada zona ponderados por su multiplicador de intensidad.
+
+    Se calcula siempre sobre el porcentaje de frecuencia máxima, aunque la interfaz
+    esté mostrando el reparto por Karvonen, porque los multiplicadores de Edwards
+    solo tienen sentido sobre las fronteras con las que él los definió.
+    """
+    if not fc_maxima:
+        return 0.0
+    reparto = tiempo_en_zonas(tiempos, pulsos, limites_en_pulsaciones(fc_maxima))
     return sum((reparto[nombre] / 60) * peso for nombre, _, _, peso in ZONAS)
 
 
@@ -117,31 +148,44 @@ def deriva_cardiaca(tiempos, pulsos):
     }
 
 
-def resumen_serie(tiempos, pulsos, fc_maxima):
-    """Agrupa en un solo diccionario todos los indicadores de una serie."""
+def resumen_serie(tiempos, pulsos, fc_maxima, limites=None):
+    """Agrupa en un solo diccionario todos los indicadores de una serie.
+
+    Args:
+        tiempos (np.ndarray): Segundos transcurridos en cada muestra.
+        pulsos (np.ndarray): Pulsaciones registradas.
+        fc_maxima (float): Máxima del atleta, que necesita el TRIMP de Edwards.
+        limites (list | None): Zonas ya en pulsaciones para el reparto. Si es None se
+            recurre al porcentaje de frecuencia máxima.
+    Returns:
+        dict: Muestras, duración, pulso medio y máximo, reparto por zonas, TRIMP y deriva.
+    """
+    if limites is None:
+        limites = limites_en_pulsaciones(fc_maxima)
     return {
         "muestras": len(tiempos),
         "duracion_s": float(tiempos[-1] - tiempos[0]) if len(tiempos) > 1 else 0.0,
         "fc_media": media_ponderada_por_tiempo(tiempos, pulsos),
         "fc_maxima": float(np.max(pulsos)) if len(pulsos) else None,
-        "zonas": tiempo_en_zonas(tiempos, pulsos, fc_maxima),
+        "zonas": tiempo_en_zonas(tiempos, pulsos, limites),
         "trimp_edwards": trimp_edwards(tiempos, pulsos, fc_maxima),
         "deriva": deriva_cardiaca(tiempos, pulsos),
     }
 
-def zona_de_pulso(fc, fc_maxima):
+
+def zona_de_pulso(fc, limites):
     """Devuelve la zona de intensidad que corresponde a un valor puntual de pulso.
 
     Args:
         fc (float): Pulsaciones por minuto.
-        fc_maxima (float): Referencia de frecuencia cardíaca máxima del atleta.
+        limites (list): Salida de limites_en_pulsaciones, ya en pulsaciones.
     Returns:
         str | None: Nombre de la zona, o None si no hay dato o no alcanza la zona 1.
     """
-    if fc is None or not fc_maxima or (isinstance(fc, float) and np.isnan(fc)):
+    if fc is None or not limites or (isinstance(fc, float) and np.isnan(fc)):
         return None
-    proporcion = float(fc) / float(fc_maxima)
-    for nombre, bajo, alto, _ in ZONAS:
-        if bajo <= proporcion < alto:
+    valor = float(fc)
+    for nombre, desde, hasta in limites:
+        if desde <= valor < hasta:
             return nombre
     return None
