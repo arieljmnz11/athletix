@@ -235,6 +235,9 @@ with tab_panel:
 
     semanal = backend.resumen_semanal(datos)
     if not semanal.empty:
+
+        semanal["Duracion_txt"] = (semanal["Minutos"] * 60).apply(backend.formatear_duracion_corta)
+
         paleta = px.colors.qualitative.Plotly
 
         fig_sem = go.Figure()
@@ -243,7 +246,7 @@ with tab_panel:
             # Los deportes estáticos no acumulan distancia ni desnivel, así que su línea
             # muestra la duración, que es lo único interpretable en esas sesiones.
             if tipo in backend.SIN_DISTANCIA:
-                plantilla = f"{tipo}: %{{customdata[1]:.0f}} min<extra></extra>"
+                plantilla = f"{tipo}: %{{customdata[1]}}<extra></extra>"
             else:
                 plantilla = (f"{tipo}: %{{y:.1f}} km<br>"
                              "Desnivel: %{customdata[0]:,.0f} m<extra></extra>")
@@ -251,7 +254,7 @@ with tab_panel:
             fig_sem.add_trace(go.Bar(
                 name=tipo, x=sub["Semana"], y=sub["Kilometros"],
                 marker_color=paleta[indice % len(paleta)],
-                customdata=np.stack([sub["Desnivel"], sub["Minutos"]], axis=-1),
+                customdata=np.stack([sub["Desnivel"], sub["Duracion_txt"]], axis=-1),
                 hovertemplate=plantilla))
 
         # El eje vuelve a ser temporal para que Plotly rotule los meses por sí solo. El
@@ -619,8 +622,8 @@ with tab_hist:
     st.divider()
     st.subheader("Últimas actividades")
     st.dataframe(backend.ultimas_actividades(datos, 10, fc_maxima_activa), width="stretch", hide_index=True)
-    st.caption("«Duración Minutos» es el tiempo en movimiento, que alimenta el cálculo de carga. "
-               "«Tiempo total» incluye las paradas y es el que cuenta como marca oficial en competición.")
+    st.caption("«Tiempo en movimiento» alimenta el cálculo de carga. «Tiempo total» "
+               "incluye las paradas y es el que cuenta como marca oficial en competición.")
 
 with tab_agente:
     st.subheader("🤖 Coach AI")
@@ -685,7 +688,7 @@ with tab_agente:
                     kpis_hoy, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
                     actividades_recientes=backend.ultimas_actividades(
                     datos_completos, ajustes_usuario["actividades_agente"],
-                    fc_maxima_activa),
+                    fc_maxima_activa, tiempo_legible=False),
                 )
 
                 with ventana_chat:
