@@ -9,6 +9,7 @@ Gestiona la capa conversacional del sistema:
   reales y no opere como un chatbot aislado.
 """
 import os                                     # Acceso a variables de entorno
+from datetime import datetime, timedelta      # Fechas y horas
 import config
 import pandas as pd                           # Para la comprobación de valores nulos
 from supabase import create_client, Client    # Cliente de la base de datos en la nube
@@ -98,16 +99,28 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
     fiabilidad declarada y el detalle de las últimas actividades individuales, de
     modo que pueda responder sobre una sesión concreta y no solo sobre agregados.
     """
+    ahora = datetime.now(config.ZONA_HORARIA)
+    # El calendario se entrega resuelto en lugar de prohibir que el modelo lo calcule:
+    # ante un "mañana" va a nombrar el día igual, y con el dato delante acierta.
+    proximos = [config.fecha_en_texto(ahora.date() + timedelta(days=i)) for i in range(1, 8)]
+
     lineas = [
         "Eres un entrenador deportivo profesional que asesora a un atleta amateur.",
         "Recibes los indicadores calculados por un sistema de análisis de datos de Strava.",
         "Responde en español, de forma breve, concreta y sin introducciones largas.",
         "",
-        f"Hoy es {config.fecha_en_texto(config.hoy())}. Esta es tu única fuente para la fecha actual:",
-        "no la deduzcas ni la inventes, y calcula sobre ella cualquier plazo o cuenta regresiva.",
+        f"Este contexto se reconstruye entero desde la base de datos en CADA mensaje. "
+        f"Se generó el {config.fecha_en_texto(ahora.date())} a las {ahora.strftime('%H:%M')}.",
+        "Si un dato cambió desde tu respuesta anterior, el válido es el de este contexto y no "
+        "el que dijiste antes. Nunca respondas que no tienes acceso a datos actualizados ni "
+        "que solo ves lo que recibiste al empezar la conversación: es falso.",
         "",
-        "No calcules ni menciones el día de la semana de ninguna fecha salvo el de hoy, "
-        "que ya viene indicado arriba.",
+        f"Hoy es {config.fecha_en_texto(ahora.date())}. Esta es tu única fuente para la fecha "
+        "actual: no la deduzcas ni la inventes, y calcula sobre ella cualquier plazo.",
+        "Días siguientes, ya resueltos. Úsalos tal cual y no los recalcules:",
+    ] + [f"  - {texto}" for texto in proximos] + [
+        "De cualquier otra fecha cita el día del mes, nunca el día de la semana.",
+        "",
         "ESTADO ACTUAL DEL ATLETA (indicadores calculados por el sistema):",
     ]
     acwr = diagnostico.get("acwr")
@@ -143,17 +156,19 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
             tipo = _valor(fila, "Tipo de actividad", defecto="Actividad")
             desnivel = _valor(fila, "D+ (m)", "Desnivel positivo", defecto=0)
             tiempo_total = _valor(fila, "Tiempo total")
-            ritmo = _valor(fila, "Ritmo (min:s/km)", "Ritmo (min/km)")
+            # Los nombres van del más reciente al más antiguo: si la tabla cambia de
+            # etiqueta, _valor devuelve el defecto en silencio y el dato desaparece.
+            ritmo = _valor(fila, "Ritmo min/km", "Ritmo (min:s/km)", "Ritmo (min/km)")
             fc = _valor(fila, "FC media", "Ritmo cardiaco promedio")
             zona = _valor(fila, "Zona media")
             
             if isinstance(ritmo, (int, float)):
                 ritmo = f"{int(ritmo)}:{int(round((ritmo % 1) * 60)):02d}"
             ritmo_txt = f", ritmo {ritmo} min/km" if ritmo not in (None, "—") else ""
-            velocidad = _valor(fila, "Vel (km/h)", "Velocidad (km/h)")
+            velocidad = _valor(fila, "Velocidad km/h", "Vel (km/h)", "Velocidad (km/h)")
             vel_txt = f", velocidad {velocidad:.1f} km/h" if velocidad is not None else ""
 
-            total_txt = f", tiempo total {tiempo_total}" if tiempo_total else ""
+            total_txt = f" (tiempo total con paradas: {tiempo_total})" if tiempo_total else ""
 
             if fc is None:
                 fc_txt = ", SIN pulso registrado"
@@ -161,7 +176,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
                 zona_txt = f" ({zona} media)" if zona and zona != "—" else ""
                 fc_txt = f", FC media {fc:.0f} ppm{zona_txt}"
 
-            lineas.append(f"- {fecha}: {tipo}, {km:.1f} km en {minutos:.0f} min de movimiento"
+            lineas.append(f"- {fecha}: {tipo}, {km:.1f} km en {minutos:.0f} min en movimiento"
                           f"{total_txt}, desnivel positivo {desnivel:.0f} m"
                           f"{ritmo_txt}{vel_txt}{fc_txt}, carga {carga:.0f}.")
             
@@ -211,7 +226,12 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
         "entera. No describe el reparto real del esfuerzo, así que una sesión de series "
         "puede promediar una zona intermedia sin haber permanecido en ella.",
         "8. Si preguntan por una fecha que no aparece en la lista de actividades, di que "
-        "queda fuera de la ventana que recibes y no supongas que no está sincronizada."
+        "queda fuera de la ventana que recibes y no supongas que no está sincronizada.",
+        "9. La duración de una sesión es el tiempo EN MOVIMIENTO. El tiempo total "
+        "incluye las paradas y solo se cita al hablar de la marca oficial de una "
+        "competición, nunca como duración del entrenamiento.",
+        "10. El ritmo y la velocidad vienen ya calculados en la lista de actividades. "
+        "Úsalos tal cual y no los deduzcas dividiendo distancia entre tiempo.",
     ]
     return "\n".join(lineas)
 
