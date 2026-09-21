@@ -643,6 +643,7 @@ with tab_agente:
     if boton.button("🗑️ Borrar memoria", width="stretch"):
         agente.borrar_historial()
         st.session_state.mensajes = []
+        st.session_state.pop("huella_actividades", None)
         st.rerun()
 
     # La conversación se confina a un contenedor de altura fija con desplazamiento propio,
@@ -690,11 +691,20 @@ with tab_agente:
                         "tiempo_texto": modelo.formatear_tiempo(modelo.ritmo_a_tiempo(ritmo_ctx, 10.0)),
                     }
 
+                recientes = backend.ultimas_actividades(
+                    datos_completos, ajustes_usuario["actividades_agente"],
+                    limites_zonas, tiempo_legible=False)
+
+                # Se compara con lo que vio el modelo en el mensaje anterior para decirle
+                # explícitamente qué cambió, en vez de esperar que lo note por su cuenta.
+                huella = agente.huella_actividades(recientes)
+                cambios = agente.cambios_de_pulso(
+                    st.session_state.get("huella_actividades", {}), huella)
+                st.session_state.huella_actividades = huella
+
                 contexto = agente.construir_contexto(
                     kpis_hoy, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
-                actividades_recientes = backend.ultimas_actividades(
-                    datos_completos, ajustes_usuario["actividades_agente"],
-                    limites_zonas, tiempo_legible=False),
+                    actividades_recientes=recientes, cambios=cambios,
                 )
 
                 with ventana_chat:

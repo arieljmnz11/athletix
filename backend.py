@@ -421,8 +421,12 @@ def ultimas_actividades(df, n=10, limites_zonas=None, tiempo_legible=True):
     tabla["Tiempo total"] = tabla["Tiempo transcurrido"].apply(formatear_duracion_corta)
 
     limites = limites_zonas or metricas_fc.limites_en_pulsaciones(config.FC_MAXIMA)
+    
+    # Se distingue "sin pulso" de "pulso por debajo de Z1": con un guion para los dos
+    # casos el agente rellenaba el hueco inventándose una zona.
     tabla["Zona media"] = tabla["Ritmo cardiaco promedio"].apply(
-        lambda fc: metricas_fc.zona_de_pulso(fc, limites) or "—")
+        lambda fc: "—" if pd.isna(fc)
+        else (metricas_fc.zona_de_pulso(fc, limites) or "bajo Z1"))
 
     # El ritmo (min/km) describe bien la carrera, pero en ciclismo la métrica
     # interpretable es la velocidad media, así que se muestra una u otra según el deporte.

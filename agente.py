@@ -9,7 +9,7 @@ Gestiona la capa conversacional del sistema:
   reales y no opere como un chatbot aislado.
 """
 import os                                     # Acceso a variables de entorno
-from datetime import datetime, timedelta      # Fechas y horas
+from datetime import datetime, timedelta
 import config
 import pandas as pd                           # Para la comprobación de valores nulos
 from supabase import create_client, Client    # Cliente de la base de datos en la nube
@@ -92,7 +92,8 @@ def registrar_estado(estado, nota="", retencion=None):
 
 # Función que construye el contexto del sistema para el agente, combinando indicadores, predicciones y diario de estado físico.
 
-def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, actividades_recientes=None):
+def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario,
+                       actividades_recientes=None, cambios=None):
     """
     Ensambla el prompt de sistema con la salida real de los módulos analíticos.
     El agente recibe los indicadores, el resultado del componente predictivo, su
@@ -100,25 +101,23 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
     modo que pueda responder sobre una sesión concreta y no solo sobre agregados.
     """
     ahora = datetime.now(config.ZONA_HORARIA)
-    # El calendario se entrega resuelto en lugar de prohibir que el modelo lo calcule:
-    # ante un "mañana" va a nombrar el día igual, y con el dato delante acierta.
-    proximos = [config.fecha_en_texto(ahora.date() + timedelta(days=i)) for i in range(1, 8)]
+    # Cada día lleva su etiqueta relativa escrita: con una lista sin etiquetar el modelo
+    # tenía que contar posiciones para encontrar "mañana" y a veces tomaba la tercera.
+    etiquetas = ["Hoy", "Mañana", "Pasado mañana"] + [f"Dentro de {i} días" for i in range(3, 8)]
+    calendario = [f"  - {etiqueta}: {config.fecha_en_texto(ahora.date() + timedelta(days=i))}"
+                  for i, etiqueta in enumerate(etiquetas)]
 
     lineas = [
         "Eres un entrenador deportivo profesional que asesora a un atleta amateur.",
         "Recibes los indicadores calculados por un sistema de análisis de datos de Strava.",
         "Responde en español, de forma breve, concreta y sin introducciones largas.",
         "",
-        f"Este contexto se reconstruye entero desde la base de datos en CADA mensaje. "
-        f"Se generó el {config.fecha_en_texto(ahora.date())} a las {ahora.strftime('%H:%M')}.",
-        "Si un dato cambió desde tu respuesta anterior, el válido es el de este contexto y no "
-        "el que dijiste antes. Nunca respondas que no tienes acceso a datos actualizados ni "
-        "que solo ves lo que recibiste al empezar la conversación: es falso.",
+        f"Hora de ESTE mensaje: {ahora.strftime('%H:%M')} del "
+        f"{config.fecha_en_texto(ahora.date())}. Todo lo que sigue refleja la base de datos "
+        "en este instante, no al inicio de la conversación.",
         "",
-        f"Hoy es {config.fecha_en_texto(ahora.date())}. Esta es tu única fuente para la fecha "
-        "actual: no la deduzcas ni la inventes, y calcula sobre ella cualquier plazo.",
-        "Días siguientes, ya resueltos. Úsalos tal cual y no los recalcules:",
-    ] + [f"  - {texto}" for texto in proximos] + [
+        "CALENDARIO, ya resuelto. Úsalo tal cual y no recalcules ningún día:",
+    ] + calendario + [
         "De cualquier otra fecha cita el día del mes, nunca el día de la semana.",
         "",
         "ESTADO ACTUAL DEL ATLETA (indicadores calculados por el sistema):",
@@ -173,7 +172,7 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
             if fc is None:
                 fc_txt = ", SIN pulso registrado"
             else:
-                zona_txt = f" ({zona} media)" if zona and zona != "—" else ""
+                zona_txt = f" (zona media: {zona})" if zona and zona != "—" else ""
                 fc_txt = f", FC media {fc:.0f} ppm{zona_txt}"
 
             lineas.append(f"- {fecha}: {tipo}, {km:.1f} km en {minutos:.0f} min en movimiento"
@@ -232,8 +231,70 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario, act
         "competición, nunca como duración del entrenamiento.",
         "10. El ritmo y la velocidad vienen ya calculados en la lista de actividades. "
         "Úsalos tal cual y no los deduzcas dividiendo distancia entre tiempo.",
+        "11. 'bajo Z1' significa que hay pulso pero por debajo de la zona 1, típico de "
+        "caminatas o recuperación. No es lo mismo que no tener pulso.",
+        "12. Este contexto se reconstruye en cada mensaje. Si lo que ves aquí contradice "
+        "algo que dijiste antes, manda este contexto. Nunca digas que no tienes acceso a "
+        "datos actualizados: es falso.",
     ]
+
+    # Va al final a propósito: es lo último que lee el modelo antes de responder y lo
+    # que más pesa frente a su propia respuesta anterior, que es donde se anclaba.
+    if cambios:
+        lineas += [
+            "",
+            "ATENCIÓN: DATOS MODIFICADOS DESDE TU RESPUESTA ANTERIOR",
+            "El atleta cambió esto después de tu último mensaje. Lo que dijiste antes sobre "
+            "estas actividades ya no vale: respóndele usando el valor nuevo.",
+        ] + [f"- {cambio}" for cambio in cambios]
     return "\n".join(lineas)
+
+
+def huella_actividades(actividades):
+    """Resume el pulso de cada actividad para poder comparar entre un mensaje y el siguiente.
+
+    La clave incluye la distancia porque dos sesiones del mismo deporte el mismo día,
+    como un doble turno de carrera, comparten fecha y tipo.
+
+    Args:
+        actividades (pd.DataFrame): Tabla que se le pasa al agente como contexto.
+    Returns:
+        dict[str, int | None]: FC media redondeada por actividad, o None si no tiene pulso.
+    """
+    if actividades is None or actividades.empty:
+        return {}
+    huella = {}
+    for _, fila in actividades.iterrows():
+        clave = f"{fila['Fecha']} {fila['Tipo de actividad']} de {fila['Km']:.1f} km"
+        fc = fila.get("FC media")
+        huella[clave] = None if pd.isna(fc) else int(round(float(fc)))
+    return huella
+
+
+def cambios_de_pulso(previa, actual):
+    """Describe las actividades cuyo pulso cambió desde el mensaje anterior.
+
+    El modelo tiende a sostener lo que ya afirmó aunque el contexto diga otra cosa, así
+    que el cambio se le entrega escrito en lugar de esperar que lo descubra comparando.
+
+    Args:
+        previa (dict): Huella del contexto que recibió el modelo en el mensaje anterior.
+        actual (dict): Huella del contexto que va a recibir ahora.
+    Returns:
+        list[str]: Una frase por actividad modificada; vacía si no hay mensaje anterior.
+    """
+    cambios = []
+    for clave, fc in actual.items():
+        if clave not in previa or previa[clave] == fc:
+            continue
+        antes = previa[clave]
+        if antes is None:
+            cambios.append(f"{clave}: antes SIN pulso, ahora FC media {fc} ppm.")
+        elif fc is None:
+            cambios.append(f"{clave}: antes FC media {antes} ppm, ahora sin pulso.")
+        else:
+            cambios.append(f"{clave}: la FC media pasó de {antes} a {fc} ppm.")
+    return cambios
 
 # Función que envía la conversación al modelo, junto con el contexto del sistema y el historial de chat.
 def consultar_agente(cliente, contexto, mensajes):
