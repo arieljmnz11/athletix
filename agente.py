@@ -17,7 +17,7 @@ from supabase import create_client, Client    # Cliente de la base de datos en l
 MAX_MENSAJES = 20            # Ventana de historial enviada al modelo
 MAX_ENTRADAS_DIARIO = 7      # Últimos días de estado que se inyectan al agente
 RETENCION_DIARIO = 30        # Días de diario que se conservan en la base de datos
-MODELO = "claude-haiku-4-5-20251001"
+MODELO = "claude-sonnet-5"
 
 _supabase: Client | None = None  # Cliente cacheado; se crea una sola vez por sesión
 
