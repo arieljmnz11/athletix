@@ -112,9 +112,10 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario,
         "Recibes los indicadores calculados por un sistema de análisis de datos de Strava.",
         "Responde en español, de forma breve, concreta y sin introducciones largas.",
         "",
-        f"Hora de ESTE mensaje: {ahora.strftime('%H:%M')} del "
-        f"{config.fecha_en_texto(ahora.date())}. Todo lo que sigue refleja la base de datos "
-        "en este instante, no al inicio de la conversación.",
+        # Sin hora a propósito: el modelo la usaba como excusa para decir que una carga
+        # hecha "después" no le había llegado.
+        "Todo lo que sigue se leyó de la base de datos al recibir el último mensaje del "
+        "atleta. Si dice que acaba de cargar o corregir algo, ya está incluido aquí.",
         "",
         "CALENDARIO, ya resuelto. Úsalo tal cual y no recalcules ningún día:",
     ] + calendario + [
@@ -296,19 +297,29 @@ def cambios_de_pulso(previa, actual):
             cambios.append(f"{clave}: la FC media pasó de {antes} a {fc} ppm.")
     return cambios
 
-# Función que envía la conversación al modelo, junto con el contexto del sistema y el historial de chat.
-def consultar_agente(cliente, contexto, mensajes):
+def consultar_agente(cliente, contexto, mensajes, aviso=None):
+    """Envía la conversación al modelo junto con el contexto del sistema.
+
+    Args:
+        cliente: Cliente de la API de Anthropic.
+        contexto (str): Prompt de sistema con los datos del atleta.
+        mensajes (list): Historial completo; se envían solo los más recientes.
+        aviso (str | None): Cambios en los datos desde la respuesta anterior.
+    Returns:
+        str: Texto de la respuesta del modelo.
     """
-    Envía la conversación al modelo junto con el contexto del sistema.
-    Trunca el historial para acotar el consumo de tokens en sesiones largas.
-    """
-    recientes = mensajes[-MAX_MENSAJES:]
+    recientes = [{"role": m["role"], "content": m["content"]} for m in mensajes[-MAX_MENSAJES:]]
+    # El aviso se pega al último mensaje del atleta solo en la copia que viaja a la API:
+    # es la posición que más pesa para el modelo y así no ensucia el historial guardado.
+    if aviso and recientes and recientes[-1]["role"] == "user":
+        recientes[-1]["content"] += f"\n\n[Aviso del sistema, no lo escribió el atleta: {aviso}]"
+
     respuesta = cliente.messages.create(
         model=MODELO,
         # Acota la longitud de la respuesta del modelo, no la del prompt de entrada.
         max_tokens=2000,
         system=contexto,
-        messages=[{"role": m["role"], "content": m["content"]} for m in recientes],
+        messages=recientes,
     )
     texto = respuesta.content[0].text
     # Un stop_reason de 'max_tokens' significa que la respuesta quedó incompleta.

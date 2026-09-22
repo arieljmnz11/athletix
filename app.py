@@ -707,10 +707,17 @@ with tab_agente:
                     actividades_recientes=recientes, cambios=cambios,
                 )
 
+                st.session_state.ultimo_contexto = contexto
+                aviso = None
+                if cambios:
+                    aviso = ("Desde tu respuesta anterior el atleta actualizó estos datos, que ya "
+                            "están en tu contexto: " + " ".join(cambios))
+
                 with ventana_chat:
                     with st.chat_message("assistant"):
                         with st.spinner("Analizando tus datos..."):
-                            texto = agente.consultar_agente(cliente, contexto, st.session_state.mensajes)
+                            texto = agente.consultar_agente(cliente, contexto,
+                                                            st.session_state.mensajes, aviso)
                         st.markdown(texto)
 
                 st.session_state.mensajes.append({"role": "assistant", "content": texto})
@@ -719,7 +726,12 @@ with tab_agente:
             except Exception as error:
                 st.error(f"No se pudo consultar al agente: {error}")
 
-
+            # Muestra exactamente lo que recibió el modelo, para distinguir si un error viene
+            # de los datos o de cómo el modelo los interpretó.
+            with st.expander("🔍 Ver lo que recibió el agente en el último mensaje"):
+                st.code(st.session_state.get("ultimo_contexto", "Todavía no hay mensajes."),
+                        language=None)
+                
 with tab_ajustes:
     st.subheader("Ajustes personales")
     st.caption("Se guardan en la base de datos, así que siguen puestos la próxima vez "
