@@ -865,3 +865,48 @@ with tab_ajustes:
             st.rerun()
         else:
             st.error("No se pudieron guardar. Revisa la conexión con la base de datos.")
+
+# Streamlit no tiene un modo oficial de desplazar la vista al abrir una pestaña, así que
+# se inyecta un script mínimo. Depende de la estructura interna de la página: si una
+# actualización de Streamlit la cambia, el script deja de actuar sin romper nada más.
+SCRIPT_IR_AL_CHAT = """
+<script>
+const padre = window.parent;
+const doc = padre.document;
+
+function irAlChat() {
+    const pestana = [...doc.querySelectorAll('button[role="tab"]')]
+        .find(b => b.innerText.includes("Coach AI"));
+    if (!pestana || pestana.getAttribute("aria-selected") !== "true") return;
+
+    // Se sube la última pregunta y no el final de la respuesta, porque una respuesta
+    // larga obligaría a leerla empezando por su última línea.
+    const mensajes = doc.querySelectorAll('[data-testid="stChatMessage"]');
+    const objetivo = mensajes[Math.max(mensajes.length - 2, 0)];
+    if (objetivo) objetivo.scrollIntoView({block: "start"});
+
+    const entrada = doc.querySelector('[data-testid="stChatInput"]');
+    if (entrada) entrada.scrollIntoView({block: "end"});
+}
+
+function alHacerClic(evento) {
+    const pestana = evento.target.closest('button[role="tab"]');
+    if (pestana && pestana.innerText.includes("Coach AI")) padre.setTimeout(irAlChat, 150);
+}
+
+// Cada ejecución reemplaza al oyente anterior en vez de acumular uno por recarga.
+if (padre.__athletixOyente) doc.removeEventListener("click", padre.__athletixOyente);
+padre.__athletixOyente = alHacerClic;
+doc.addEventListener("click", alHacerClic);
+
+// Mensajes en la conversación: __TOTAL__. El número cambia con cada mensaje nuevo, y
+// eso obliga a Streamlit a ejecutar otra vez el script para bajar a la respuesta.
+padre.setTimeout(irAlChat, 150);
+</script>
+"""
+
+# height=1 satisface la validación de entero positivo sin generar espacio visual visible
+st.iframe(
+    SCRIPT_IR_AL_CHAT.replace("__TOTAL__", str(len(st.session_state.mensajes))),
+    height=1,
+)
