@@ -379,29 +379,46 @@ with tab_pred:
             p1, p2 = st.columns([1, 2])
 
             with p1:
-                meta_min = st.number_input(f"Meta en {distancia:g} km (minutos)",
-                                           min_value=10.0, max_value=300.0,
-                                           value=float(round(tiempo * 0.95, 1)), step=1.0)
+                st.markdown(f"**Meta en {distancia:g} km**")
+                horas_defecto, minutos_defecto = divmod(int(round(tiempo * 0.95)), 60)
 
-            ritmo_meta_ref = (meta_min / ((distancia / 10.0) ** modelo.EXPONENTE_RIEGEL)) / 10.0
-            plan = modelo.planificar_volumen(entrenamiento, metricas, ritmo_meta_ref)
+                col_h, col_m = st.columns(2)
+                meta_horas = col_h.number_input("Horas", min_value=0, max_value=4,
+                                                value=horas_defecto, step=1)
+                meta_minutos = col_m.number_input("Minutos", min_value=0, max_value=59,
+                                                  value=minutos_defecto, step=1)
+                meta_min = meta_horas * 60 + meta_minutos
 
-            with p2:
-                if not plan["viable"]:
-                    st.error(plan["mensaje"])
-                else:
-                    q1, q2 = st.columns(2)
-                    q1.metric("Volumen actual", f"{plan['km_actual']:.1f} km/sem")
-                    q2.metric("Volumen necesario", f"{plan['km_necesarios']:.1f} km/sem",
-                              delta=f"{plan['incremento_pct']:+.0f} %")
+                if meta_min >= 10:
+                    st.caption(f"Son {modelo.formatear_tiempo(meta_min)}, a "
+                               f"{backend.formatear_ritmo(meta_min / distancia)} min/km.")
 
-                    if plan["riesgo"]:
-                        st.error(f"⚠️ Ese salto de volumen ({plan['incremento_pct']:+.0f} %) supera la regla del 10 % "
-                                 "semanal y te llevaría a la zona de riesgo de lesión del ACWR. "
-                                 "Reparte el incremento en varios mesociclos.")
+            if meta_min < 10:
+                with p2:
+                    st.info("Fija una meta de al menos 10 minutos para calcular el plan.")
+            else:
+                ritmo_meta_ref = (meta_min / ((distancia / 10.0) ** modelo.EXPONENTE_RIEGEL)) / 10.0
+                plan = modelo.planificar_volumen(entrenamiento, metricas, ritmo_meta_ref)
+
+                with p2:
+                    if not plan["viable"]:
+                        st.error(plan["mensaje"])
                     else:
-                        st.success("✅ El incremento necesario está dentro de una progresión segura (menos del 10 %).")
+                        q1, q2 = st.columns(2)
+                        q1.metric("Volumen actual", f"{plan['km_actual']:.1f} km/sem")
+                        q2.metric("Volumen necesario", f"{plan['km_necesarios']:.1f} km/sem",
+                                  delta=f"{plan['incremento_pct']:+.0f} %")
+                        st.caption("Este volumen cuenta solo tus carreras de 5 km o más con ritmo "
+                                   "válido, que son las que alimentan el modelo. No es tu volumen "
+                                   "semanal total.")
 
+                        if plan["riesgo"]:
+                            st.error(f"⚠️ Ese salto de volumen ({plan['incremento_pct']:+.0f} %) supera "
+                                     "la regla del 10 % semanal y te llevaría a la zona de riesgo de "
+                                     "lesión del ACWR. Reparte el incremento en varios mesociclos.")
+                        else:
+                            st.success("✅ El incremento necesario está dentro de una progresión segura "
+                                       "(menos del 10 %).")
         st.divider()
         st.subheader("Progresión: mejor ritmo por mesociclo")
 

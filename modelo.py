@@ -13,6 +13,7 @@ Incluye:
 
 import numpy as np                                                                 # Operaciones numéricas
 import pandas as pd                                                                # Manejo de datos tabulares
+import config
 from sklearn.linear_model import LinearRegression                                  # Modelo de regresión lineal múltiple
 from sklearn.model_selection import LeaveOneOut, cross_val_predict                 # Validación cruzada exhaustiva
 from sklearn.metrics import r2_score, mean_absolute_error                          # Métricas de error del modelo
@@ -117,7 +118,10 @@ def metricas_ultimo_bloque(df, hoy=None, dias=28):
     Extrae las métricas del mesociclo vigente (últimos 28 días) para alimentar
     el modelo. Devuelve None si el bloque no contiene carreras válidas.
     """
-    hoy = pd.Timestamp(hoy).normalize() if hoy is not None else pd.Timestamp.today().normalize()  # Fecha de referencia
+
+    # La fecha se ancla a la zona horaria del atleta: el servidor corre en UTC y de noche
+    # desplazaría un día la ventana de 28 días.
+    hoy = pd.Timestamp(hoy).normalize() if hoy is not None else pd.Timestamp(config.hoy())
     inicio = hoy - pd.Timedelta(days=dias)                                         # Inicio de la ventana de análisis
     bloque = df[df["Fecha"] >= inicio]                                             # Actividades del mesociclo vigente
 
