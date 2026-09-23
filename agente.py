@@ -316,12 +316,21 @@ def consultar_agente(cliente, contexto, mensajes, aviso=None):
 
     respuesta = cliente.messages.create(
         model=MODELO,
-        # Acota la longitud de la respuesta del modelo, no la del prompt de entrada.
-        max_tokens=2000,
+        # El presupuesto lo comparten el razonamiento interno y la respuesta visible, así
+        # que se deja holgado para que al texto no le falte espacio.
+        max_tokens=4000,
         system=contexto,
         messages=recientes,
     )
-    texto = respuesta.content[0].text
+
+    # Los modelos con razonamiento devuelven bloques de varios tipos y el primero puede no
+    # ser texto, así que se recogen solo los de texto en vez de tomar el primero a ciegas.
+    texto = "".join(bloque.text for bloque in respuesta.content
+                    if getattr(bloque, "type", "") == "text")
+
+    if not texto:
+        return ("_(El modelo gastó todo el presupuesto razonando y no llegó a responder. "
+                "Vuelve a preguntar.)_")
     # Un stop_reason de 'max_tokens' significa que la respuesta quedó incompleta.
     if respuesta.stop_reason == "max_tokens":
         texto += "\n\n_(Respuesta cortada por longitud. Pide que continúe si falta algo.)_"
