@@ -885,8 +885,11 @@ function irAlChat() {
     const objetivo = mensajes[Math.max(mensajes.length - 2, 0)];
     if (objetivo) objetivo.scrollIntoView({block: "start"});
 
-    const entrada = doc.querySelector('[data-testid="stChatInput"]');
-    if (entrada) entrada.scrollIntoView({block: "end"});
+    // Se busca la caja por su texto de ejemplo, que escribimos nosotros y no depende de
+    // las etiquetas internas de Streamlit; la etiqueta interna queda como respaldo.
+    const entrada = doc.querySelector('textarea[placeholder^="Ej:"]')
+        || doc.querySelector('[data-testid="stChatInput"]');
+    if (entrada) { entrada.scrollIntoView({block: "end"}); entrada.focus({preventScroll: true}); }
 }
 
 function alHacerClic(evento) {
