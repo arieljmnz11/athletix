@@ -324,8 +324,10 @@ with tab_carga:
 
 with tab_pred:
     st.subheader("Predicción de rendimiento por mesociclo")
-    st.caption("Regresión lineal múltiple entrenada sobre bloques de 28 días. Se usan mesociclos y no semanas "
-               "porque el descanso previo a competición (tapering) sesgaría el modelo hacia tiempos más lentos.")
+    st.caption("Regresión simple validada con Leave-One-Out: el mejor ritmo del mesociclo "
+               "anterior predice el de este bloque, corregido hacia tu nivel medio. Se usan "
+               "mesociclos y no semanas porque el descanso previo a competición (tapering) "
+               "sesgaría el modelo hacia tiempos más lentos.")
 
     entrenamiento = modelo.entrenar_modelo(datos_completos)
 
@@ -337,15 +339,47 @@ with tab_pred:
         m2.metric("R² (validación LOO)", f"{entrenamiento['r2']:.2f}")
         m3.metric("Error medio", f"{entrenamiento['mae']:.2f} min/km")
 
-        mejora = 100 * (1 - entrenamiento["mae"] / entrenamiento["mae_baseline"])
-        st.caption(f"El modelo reduce el error un {mejora:.0f} % frente a predecir siempre tu ritmo medio "
-                   f"({entrenamiento['mae_baseline']:.2f} min/km). Validado con Leave-One-Out sobre datos reales.")
+        mejora = 100 * (1 - entrenamiento["mae"] / entrenamiento["mae_marca_previa"])
+        st.caption(f"El modelo reduce el error un {mejora:.0f} % frente a repetir sin más la marca "
+                   f"del bloque anterior ({entrenamiento['mae_marca_previa']:.2f} min/km). Esa es la "
+                   "referencia que hay que superar, no el ritmo medio histórico.")
+
+        with st.expander("▸ Cómo se eligió este modelo"):
+            st.markdown(
+                "El modelo original usaba tres variables, entre ellas el ritmo medio de las "
+                "carreras del propio bloque para predecir el mejor ritmo de ese bloque. Eso "
+                "predice el mínimo de un conjunto a partir del promedio de ese mismo conjunto, "
+                "que es aritmética y no una relación de entrenamiento. Producía un R² alto que "
+                "no sobrevivió a una comparación honesta contra dos referencias simples: "
+                "repetir el ritmo medio histórico, y repetir sin más la marca del bloque "
+                "anterior. El volumen semanal y las horas de entrenamiento, solas o "
+                "combinadas, no superaron ni la referencia más simple, porque el historial no "
+                "tiene variación suficiente entre bloques para medir su efecto. Tampoco eso "
+                "significa que el volumen no importe en la realidad. También se intentó "
+                "calibrar un factor de desnivel para incluir las carreras de montaña, y se "
+                "descartó: cuatro métodos de estimación dieron valores entre 100 y 1015 metros "
+                "por kilómetro, demasiado dispersos para ser de fiar con este historial. Queda "
+                "pendiente para cuando existan series GPS punto a punto."
+            )
+            comparacion = pd.DataFrame([
+                {"Predicción": "Repetir el ritmo medio histórico",
+                 "MAE": f"{entrenamiento['mae_baseline']:.3f} min/km"},
+                {"Predicción": "Repetir la marca del bloque anterior",
+                 "MAE": f"{entrenamiento['mae_marca_previa']:.3f} min/km"},
+                {"Predicción": "Modelo actual (regresión sobre el bloque anterior)",
+                 "MAE": f"{entrenamiento['mae']:.3f} min/km"},
+            ])
+            st.dataframe(comparacion, width="stretch", hide_index=True)
+            st.caption("Estos dos primeros valores se recalculan en vivo con tu histórico actual. "
+                       "La comparación completa de las seis variantes probadas, incluida la del "
+                       "desnivel, queda documentada en comparar_modelos.py.")
 
         st.divider()
         metricas = modelo.metricas_ultimo_bloque(datos_completos)
 
         if metricas is None:
-            st.info("No hay carreras de 5 km o más en los últimos 28 días. Sal a correr y vuelve a consultar.")
+            st.info("Para predecir hace falta al menos una carrera de 5 km o más tanto en los "
+                    "últimos 28 días como en los 28 anteriores a esos. Sal a correr y vuelve a consultar.")
             prediccion = None
         else:
             col_dist, col_res = st.columns([1, 2])
@@ -354,31 +388,35 @@ with tab_pred:
                 distancia = st.selectbox("Distancia objetivo", [5.0, 10.0, 15.0, 21.1],
                                          index=1, format_func=lambda d: f"{d:g} km")
 
-            ritmo = modelo.predecir_ritmo(entrenamiento, metricas)
-            tiempo = modelo.ritmo_a_tiempo(ritmo, distancia)
+            ritmo_referencia = modelo.predecir_ritmo(entrenamiento, metricas)
+            tiempo = modelo.ritmo_a_tiempo(ritmo_referencia, distancia)
             tiempo_texto = modelo.formatear_tiempo(tiempo)
+            # El ritmo mostrado se deriva del tiempo ya ajustado por Riegel, para que cambie
+            # con la distancia elegida en lugar de mostrar siempre el mismo valor de referencia.
+            ritmo_mostrado = tiempo / distancia
 
             with col_res:
                 r1, r2 = st.columns(2)
                 r1.metric(f"Tiempo estimado en {distancia:g} km", tiempo_texto)
                 r2.metric("Ritmo de competición",
-                          f"{backend.formatear_ritmo(ritmo)} min/km")
+                          f"{backend.formatear_ritmo(ritmo_mostrado)} min/km")
 
             if modelo.fuera_de_rango_calibrado(distancia):
                 st.warning(f"⚠️ El modelo está calibrado con esfuerzos de {modelo.RANGO_CALIBRADO[0]} a "
                            f"{modelo.RANGO_CALIBRADO[1]} km. La proyección a {distancia:g} km es una extrapolación "
                            "corregida con la fórmula de Riegel y su fiabilidad es menor.")
 
-            prediccion = {"ritmo": ritmo, "distancia": distancia, "tiempo_texto": tiempo_texto}
+            prediccion = {"ritmo": ritmo_mostrado, "distancia": distancia, "tiempo_texto": tiempo_texto}
 
             st.divider()
-            st.subheader("🎯 Planificador de mesociclo")
-            st.caption("El modelo se invierte: en lugar de predecir tu marca a partir del entrenamiento, "
-                       "despeja el volumen semanal necesario para alcanzar la marca que te propongas.")
+            st.subheader("🎯 Verificador de viabilidad")
+            st.caption("Contrasta una meta contra tu progresión histórica real. No proyecta un "
+                       "volumen de entrenamiento: el historial no sostiene esa relación (ver el "
+                       "desplegable de arriba).")
 
-            p1, p2 = st.columns([1, 2])
+            v1, v2 = st.columns([1, 2])
 
-            with p1:
+            with v1:
                 st.markdown(f"**Meta en {distancia:g} km**")
                 horas_defecto, minutos_defecto = divmod(int(round(tiempo * 0.95)), 60)
 
@@ -394,31 +432,51 @@ with tab_pred:
                                f"{backend.formatear_ritmo(meta_min / distancia)} min/km.")
 
             if meta_min < 10:
-                with p2:
-                    st.info("Fija una meta de al menos 10 minutos para calcular el plan.")
+                with v2:
+                    st.info("Fija una meta de al menos 10 minutos para verificarla.")
             else:
-                ritmo_meta_ref = (meta_min / ((distancia / 10.0) ** modelo.EXPONENTE_RIEGEL)) / 10.0
-                plan = modelo.planificar_volumen(entrenamiento, metricas, ritmo_meta_ref)
+                verificacion = modelo.verificar_viabilidad(entrenamiento, metricas, meta_min, distancia)
 
-                with p2:
-                    if not plan["viable"]:
-                        st.error(plan["mensaje"])
+                with v2:
+                    if not verificacion["viable"]:
+                        st.error(verificacion["mensaje"])
                     else:
-                        q1, q2 = st.columns(2)
-                        q1.metric("Volumen actual", f"{plan['km_actual']:.1f} km/sem")
-                        q2.metric("Volumen necesario", f"{plan['km_necesarios']:.1f} km/sem",
-                                  delta=f"{plan['incremento_pct']:+.0f} %")
-                        st.caption("Este volumen cuenta solo tus carreras de 5 km o más con ritmo "
-                                   "válido, que son las que alimentan el modelo. No es tu volumen "
-                                   "semanal total.")
+                        mejora_exigida = verificacion["mejora_exigida_min_km"]
+                        st.metric("Mejora que exige la meta",
+                                  f"{mejora_exigida:+.2f} min/km ({verificacion['mejora_exigida_pct']:+.0f} %)")
+                        st.caption(f"Margen de error del modelo: ±{verificacion['margen_error']:.2f} min/km "
+                                   "sobre el ritmo estimado, arriba de este bloque.")
 
-                        if plan["riesgo"]:
-                            st.error(f"⚠️ Ese salto de volumen ({plan['incremento_pct']:+.0f} %) supera "
-                                     "la regla del 10 % semanal y te llevaría a la zona de riesgo de "
-                                     "lesión del ACWR. Reparte el incremento en varios mesociclos.")
+                        referencias = verificacion["referencias"]
+                        if referencias:
+                            filas_ref = [{
+                                "Plazo": f"{meses} mesociclo" + ("s" if meses > 1 else "") + f" (~{meses * 4} sem)",
+                                "Tu mejora típica en ese plazo": f"{ref['mejora_media_min_km']:+.2f} min/km",
+                                "Medido sobre": f"{ref['pares']} bloques de tu historial",
+                            } for meses, ref in sorted(referencias.items())]
+                            st.dataframe(pd.DataFrame(filas_ref), width="stretch", hide_index=True)
+
+                            # Se compara contra el plazo más largo disponible, el más permisivo, porque
+                            # sin un objetivo con fecha el sistema no sabe cuántas semanas quedan de verdad.
+                            plazo_max = max(referencias)
+                            tipica = referencias[plazo_max]["mejora_media_min_km"]
+
+                            if mejora_exigida <= 0:
+                                st.success("✅ Tu ritmo estimado ya alcanza esta meta.")
+                            elif mejora_exigida <= max(tipica, 0.01):
+                                st.success(f"✅ Está en línea con lo que sueles mejorar en "
+                                           f"{plazo_max} mesociclos. Meta razonable con el tiempo suficiente.")
+                            elif mejora_exigida <= 2 * max(tipica, 0.01):
+                                st.warning(f"⚠️ Exige más del doble de tu mejora típica en {plazo_max} "
+                                           "mesociclos. Alcanzable con más tiempo del que sugiere esa fila, "
+                                           "o revisando la meta.")
+                            else:
+                                st.error(f"⚠️ Muy por encima de tu progresión histórica en {plazo_max} "
+                                         "mesociclos. Considera una meta más conservadora o un plazo mayor.")
                         else:
-                            st.success("✅ El incremento necesario está dentro de una progresión segura "
-                                       "(menos del 10 %).")
+                            st.caption("Aún no hay suficiente historial consecutivo para medir tu "
+                                       "progresión típica y dar una referencia.")
+
         st.divider()
         st.subheader("Progresión: mejor ritmo por mesociclo")
 
