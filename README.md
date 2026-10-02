@@ -29,7 +29,7 @@ análisis se puede ejecutar y probar sin levantar la interfaz.
 |---|---|
 | `app.py` | Interfaz en Streamlit. Cinco pestañas de análisis y el chat del agente. |
 | `backend.py` | Limpieza, normalización, cálculo de carga, ACWR y agregaciones. |
-| `modelo.py` | Componente predictivo. Regresión por mesociclos y planificador inverso. |
+| `modelo.py` | Componente predictivo. Regresión simple por mesociclos y verificador de viabilidad. |
 | `agente.py` | Construcción del contexto del LLM y persistencia de la conversación. |
 | `data_loader.py` | Adquisición desde la API de Strava y persistencia en Supabase. |
 | `metricas_fc.py` | Funciones puras de análisis de series de frecuencia cardíaca. |
@@ -150,16 +150,22 @@ umbrales de referencia son 0.8, 1.3 y 1.5, según Gabbett (2016). El diagnóstic
 calcula siempre con todos los deportes juntos, ya que el organismo acumula una sola
 fatiga y separar la carga por disciplina produciría diagnósticos contradictorios.
 
-**Predicción de rendimiento.** Regresión lineal múltiple entrenada sobre bloques de 28
-días. Se usan mesociclos y no semanas porque el descanso previo a una competición sesgaría
-el modelo hacia tiempos más lentos. La validación es Leave One Out, y la interfaz reporta
-el coeficiente de determinación, el error absoluto medio y la mejora frente a predecir
-siempre el ritmo medio. La proyección a distancias fuera del rango calibrado se corrige
-con la fórmula de Riegel y se advierte de forma explícita en pantalla.
+**Predicción de rendimiento.** Regresión simple entrenada sobre bloques de 28 días, donde
+el mejor ritmo del bloque anterior predice el del bloque actual. Se usan mesociclos y no
+semanas porque el descanso previo a una competición sesgaría el modelo hacia tiempos más
+lentos. La validación es Leave One Out contra dos referencias ingenuas, repetir el ritmo
+medio histórico y repetir la marca del bloque anterior sin ajuste, porque un modelo que no
+supere la segunda no aporta nada. Un modelo anterior con tres variables, entre ellas el
+ritmo medio del propio bloque, quedó descartado por predecir el mínimo de un conjunto a
+partir del promedio de ese mismo conjunto. Ejecutar `python comparar_modelos.py` reproduce
+la comparación completa con el historial del momento, incluido el intento de calibrar un
+factor de desnivel para las carreras de montaña, que de momento no superó la prueba de
+consistencia entre métodos.
 
-**Planificador de mesociclo.** El mismo modelo se invierte para despejar el volumen
-semanal necesario para alcanzar una marca objetivo. Si el incremento exigido supera el
-10 % semanal, la interfaz lo señala como riesgo por coherencia con los umbrales del ACWR.
+**Verificador de viabilidad.** No proyecta un volumen de entrenamiento porque el historial
+no sostiene esa relación, según la misma comparación de `comparar_modelos.py`. Contrasta el
+ritmo que exige una meta contra la progresión histórica real del atleta, medida como la
+mejora típica entre bloques separados por una, dos, tres y seis mesociclos.
 
 **Zonas de intensidad y TRIMP de Edwards.** Sobre las series de pulso cargadas a mano se
 reparte la duración en cinco zonas por porcentaje de la frecuencia cardíaca máxima, y se

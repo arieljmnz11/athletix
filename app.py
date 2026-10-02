@@ -267,7 +267,30 @@ with tab_panel:
                               xaxis_title="", yaxis_title="Km",
                               xaxis_hoverformat="Semana del %d/%m/%Y",
                               yaxis_tickformat=".1f")
-        st.plotly_chart(fig_sem, width="stretch")
+        evento_semana = st.plotly_chart(fig_sem, width="stretch", on_select="rerun",
+                                        selection_mode="points", key="grafico_semanal")
+
+        # Streamlit no recibe el paso del cursor desde Plotly, solo clics y selecciones, así
+        # que el panel sigue a la barra que se toca. Sin selección muestra la semana más reciente.
+        semanas = semanal["Semana"].dt.normalize()
+        semana_activa = semanas.max()
+        puntos = (evento_semana or {}).get("selection", {}).get("points", [])
+        if puntos:
+            tocada = pd.to_datetime(puntos[0].get("x"), errors="coerce")
+            if pd.notna(tocada) and tocada.normalize() in set(semanas):
+                semana_activa = tocada.normalize()
+
+        de_la_semana = semanal[semanas == semana_activa]
+        fin_sem = semana_activa + pd.Timedelta(days=6)
+
+        st.markdown(f"**Semana del {semana_activa:%d/%m} al {fin_sem:%d/%m/%Y}**")
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Distancia", f"{de_la_semana['Kilometros'].sum():,.1f} km")
+        s2.metric("Desnivel positivo", f"{de_la_semana['Desnivel'].sum():,.0f} m")
+        s3.metric("Tiempo en movimiento",
+                  backend.formatear_duracion_corta(de_la_semana["Minutos"].sum() * 60))
+        st.caption("Toca una barra para ver los totales de esa semana. Sin ninguna barra tocada "
+                   "se muestra la más reciente.")
 
 with tab_carga:
     st.subheader("Fatiga frente a condición física")
@@ -322,12 +345,23 @@ with tab_carga:
                                    xaxis_title="", yaxis_tickformat=".1f", yaxis_range=[0, 2.5])
             st.plotly_chart(fig_acwr, width="stretch")
 
+# Bloque completo de la pestaña Predicción y Plan. Reemplaza desde "with tab_pred:" hasta,
+# sin incluirla, la línea "with tab_pulso:".
+
+def segundos_texto(min_km):
+    """Convierte una diferencia de ritmo en segundos por kilómetro legibles."""
+    segundos = round(abs(min_km) * 60)
+    if segundos == 0:
+        return "sin diferencia"
+    return f"{segundos} s por km " + ("más rápido" if min_km > 0 else "más lento")
+
+
 with tab_pred:
     st.subheader("Predicción de rendimiento por mesociclo")
-    st.caption("Regresión simple validada con Leave-One-Out: el mejor ritmo del mesociclo "
-               "anterior predice el de este bloque, corregido hacia tu nivel medio. Se usan "
-               "mesociclos y no semanas porque el descanso previo a competición (tapering) "
-               "sesgaría el modelo hacia tiempos más lentos.")
+    st.caption("Regresión simple validada con Leave-One-Out donde el mejor ritmo del mesociclo "
+               "anterior predice el de este bloque, con un ajuste que acerca los meses "
+               "excepcionales a tu nivel habitual. Se usan mesociclos y no semanas porque el "
+               "descanso previo a competición, el tapering, sesgaría el modelo hacia tiempos más lentos.")
 
     entrenamiento = modelo.entrenar_modelo(datos_completos)
 
@@ -336,43 +370,27 @@ with tab_pred:
     else:
         m1, m2, m3 = st.columns(3)
         m1.metric("Mesociclos de entrenamiento", entrenamiento["n_mesociclos"])
-        m2.metric("R² (validación LOO)", f"{entrenamiento['r2']:.2f}")
-        m3.metric("Error medio", f"{entrenamiento['mae']:.2f} min/km")
+        m2.metric("R² - validación LOO", f"{entrenamiento['r2']:.2f}",
+                  help="Mide cuánto de la variación entre tus bloques logra explicar el modelo "
+                       "cuando predice cada uno sin haberlo visto. Vale 1 si acierta siempre. "
+                       "Con 0 acierta lo mismo que repetir siempre tu ritmo medio, y por debajo "
+                       "de 0 lo hace peor. La validación LOO aparta un bloque, entrena con todos "
+                       "los demás, predice el apartado y repite el proceso con cada bloque.")
+        m3.metric("Error medio del modelo", f"{entrenamiento['mae']:.2f} min/km",
+                  help=f"Cuánto se equivoca el modelo en promedio al predecir el mejor ritmo de "
+                       f"un bloque. {entrenamiento['mae']:.2f} min/km equivalen a unos "
+                       f"{entrenamiento['mae'] * 60:.0f} segundos por kilómetro. Se calcula con "
+                       "las mismas predicciones sin ver el bloque que usa el R².")
 
         mejora = 100 * (1 - entrenamiento["mae"] / entrenamiento["mae_marca_previa"])
-        st.caption(f"El modelo reduce el error un {mejora:.0f} % frente a repetir sin más la marca "
-                   f"del bloque anterior ({entrenamiento['mae_marca_previa']:.2f} min/km). Esa es la "
-                   "referencia que hay que superar, no el ritmo medio histórico.")
-
-        with st.expander("▸ Cómo se eligió este modelo"):
-            st.markdown(
-                "El modelo original usaba tres variables, entre ellas el ritmo medio de las "
-                "carreras del propio bloque para predecir el mejor ritmo de ese bloque. Eso "
-                "predice el mínimo de un conjunto a partir del promedio de ese mismo conjunto, "
-                "que es aritmética y no una relación de entrenamiento. Producía un R² alto que "
-                "no sobrevivió a una comparación honesta contra dos referencias simples: "
-                "repetir el ritmo medio histórico, y repetir sin más la marca del bloque "
-                "anterior. El volumen semanal y las horas de entrenamiento, solas o "
-                "combinadas, no superaron ni la referencia más simple, porque el historial no "
-                "tiene variación suficiente entre bloques para medir su efecto. Tampoco eso "
-                "significa que el volumen no importe en la realidad. También se intentó "
-                "calibrar un factor de desnivel para incluir las carreras de montaña, y se "
-                "descartó: cuatro métodos de estimación dieron valores entre 100 y 1015 metros "
-                "por kilómetro, demasiado dispersos para ser de fiar con este historial. Queda "
-                "pendiente para cuando existan series GPS punto a punto."
-            )
-            comparacion = pd.DataFrame([
-                {"Predicción": "Repetir el ritmo medio histórico",
-                 "MAE": f"{entrenamiento['mae_baseline']:.3f} min/km"},
-                {"Predicción": "Repetir la marca del bloque anterior",
-                 "MAE": f"{entrenamiento['mae_marca_previa']:.3f} min/km"},
-                {"Predicción": "Modelo actual (regresión sobre el bloque anterior)",
-                 "MAE": f"{entrenamiento['mae']:.3f} min/km"},
-            ])
-            st.dataframe(comparacion, width="stretch", hide_index=True)
-            st.caption("Estos dos primeros valores se recalculan en vivo con tu histórico actual. "
-                       "La comparación completa de las seis variantes probadas, incluida la del "
-                       "desnivel, queda documentada en comparar_modelos.py.")
+        if mejora > 0:
+            st.caption(f"Si en cada bloque se repitiera el mejor ritmo del bloque anterior, el error "
+                       f"medio sería de {entrenamiento['mae_marca_previa']:.2f} min/km. El modelo lo "
+                       f"deja en {entrenamiento['mae']:.2f} min/km, un {mejora:.0f} % menos.")
+        else:
+            st.caption(f"Repetir el mejor ritmo del bloque anterior da un error medio de "
+                       f"{entrenamiento['mae_marca_previa']:.2f} min/km y el modelo no lo mejora con "
+                       f"los datos actuales, que dan {entrenamiento['mae']:.2f} min/km.")
 
         st.divider()
         metricas = modelo.metricas_ultimo_bloque(datos_completos)
@@ -394,6 +412,7 @@ with tab_pred:
             # El ritmo mostrado se deriva del tiempo ya ajustado por Riegel, para que cambie
             # con la distancia elegida en lugar de mostrar siempre el mismo valor de referencia.
             ritmo_mostrado = tiempo / distancia
+            escala_distancia = ritmo_mostrado / ritmo_referencia
 
             with col_res:
                 r1, r2 = st.columns(2)
@@ -410,9 +429,11 @@ with tab_pred:
 
             st.divider()
             st.subheader("🎯 Verificador de viabilidad")
-            st.caption("Contrasta una meta contra tu progresión histórica real. No proyecta un "
-                       "volumen de entrenamiento: el historial no sostiene esa relación (ver el "
-                       "desplegable de arriba).")
+            st.caption("Contrasta una meta contra tu progresión histórica real. No proyecta un volumen "
+                       "de entrenamiento porque el historial no sostiene esa relación. Tus bloques "
+                       "entrenan cantidades parecidas cada mes, y sin meses de mucho y de poco volumen "
+                       "no hay contraste para medir cuánto mejora el ritmo por cada kilómetro extra. "
+                       "Que no se pueda medir con estos datos no significa que el volumen no importe.")
 
             v1, v2 = st.columns([1, 2])
 
@@ -442,16 +463,35 @@ with tab_pred:
                         st.error(verificacion["mensaje"])
                     else:
                         mejora_exigida = verificacion["mejora_exigida_min_km"]
-                        st.metric("Mejora que exige la meta",
-                                  f"{mejora_exigida:+.2f} min/km ({verificacion['mejora_exigida_pct']:+.0f} %)")
-                        st.caption(f"Margen de error del modelo: ±{verificacion['margen_error']:.2f} min/km "
-                                   "sobre el ritmo estimado, arriba de este bloque.")
+                        diferencia_total = tiempo - meta_min
+
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Ritmo estimado", f"{backend.formatear_ritmo(ritmo_mostrado)} min/km",
+                                  help="Es el ritmo que el modelo calcula para ti en esta distancia, "
+                                       "el mismo que aparece arriba.")
+                        c2.metric("Ritmo de la meta", f"{backend.formatear_ritmo(meta_min / distancia)} min/km")
+                        c3.metric("Lo que exige la meta",
+                                  segundos_texto(mejora_exigida) if mejora_exigida > 0 else "Nada, ya la cumples",
+                                  help="Resta entre tu ritmo estimado y el ritmo de la meta, expresada "
+                                       "en segundos por kilómetro. Si la meta es más lenta que tu "
+                                       "estimación no exige nada.")
+
+                        if diferencia_total > 0:
+                            st.caption(f"En los {distancia:g} km son {modelo.formatear_tiempo(diferencia_total)} "
+                                       "menos que tu tiempo estimado.")
+
+                        margen = verificacion["margen_error"] * escala_distancia
+                        st.caption(f"El modelo suele equivocarse unos {margen * 60:.0f} segundos por "
+                                   f"kilómetro, el mismo error medio de arriba. Lo razonable es pensar en "
+                                   f"un ritmo entre {backend.formatear_ritmo(ritmo_mostrado - margen)} y "
+                                   f"{backend.formatear_ritmo(ritmo_mostrado + margen)} min/km.")
 
                         referencias = verificacion["referencias"]
                         if referencias:
                             filas_ref = [{
-                                "Plazo": f"{meses} mesociclo" + ("s" if meses > 1 else "") + f" (~{meses * 4} sem)",
-                                "Tu mejora típica en ese plazo": f"{ref['mejora_media_min_km']:+.2f} min/km",
+                                "Plazo": f"{meses} mesociclo" + ("s" if meses > 1 else "")
+                                         + f", unas {meses * 4} semanas",
+                                "Lo que sueles mejorar en ese plazo": segundos_texto(ref["mejora_media_min_km"]),
                                 "Medido sobre": f"{ref['pares']} bloques de tu historial",
                             } for meses, ref in sorted(referencias.items())]
                             st.dataframe(pd.DataFrame(filas_ref), width="stretch", hide_index=True)
@@ -467,9 +507,8 @@ with tab_pred:
                                 st.success(f"✅ Está en línea con lo que sueles mejorar en "
                                            f"{plazo_max} mesociclos. Meta razonable con el tiempo suficiente.")
                             elif mejora_exigida <= 2 * max(tipica, 0.01):
-                                st.warning(f"⚠️ Exige más del doble de tu mejora típica en {plazo_max} "
-                                           "mesociclos. Alcanzable con más tiempo del que sugiere esa fila, "
-                                           "o revisando la meta.")
+                                st.warning(f"⚠️ Exige más del doble de lo que sueles mejorar en {plazo_max} "
+                                           "mesociclos. Es alcanzable con más tiempo o revisando la meta.")
                             else:
                                 st.error(f"⚠️ Muy por encima de tu progresión histórica en {plazo_max} "
                                          "mesociclos. Considera una meta más conservadora o un plazo mayor.")
@@ -487,13 +526,24 @@ with tab_pred:
         origen = datos_completos["Fecha"].min().normalize()
         historico["Inicio"] = origen + pd.to_timedelta(historico["Mesociclo"] * 28, unit="D")
 
-        fig_prog = px.line(historico, x="Inicio", y="mejor_ritmo", markers=True,
-                           labels={"mejor_ritmo": "Mejor ritmo (min/km)", "Inicio": "Inicio del bloque"})
-
+        # El mejor ritmo de cada bloque oscila mucho porque depende de si ese mes hubo un
+        # esfuerzo a tope. La media de tres bloques suaviza el zigzag y deja ver la tendencia.
+        historico["Tendencia"] = historico["mejor_ritmo"].rolling(3, center=True, min_periods=2).mean()
         historico["Ritmo texto"] = historico["mejor_ritmo"].apply(backend.formatear_ritmo)
-        fig_prog.update_traces(customdata=historico[["Ritmo texto"]],
-                               hovertemplate="Bloque iniciado el %{x|%d/%m/%Y}<br>"
-                                             "Mejor ritmo: %{customdata[0]} min/km<extra></extra>")
+        historico["Tendencia texto"] = historico["Tendencia"].apply(backend.formatear_ritmo)
+
+        fig_prog = go.Figure()
+        fig_prog.add_trace(go.Scatter(
+            x=historico["Inicio"], y=historico["mejor_ritmo"], mode="lines+markers",
+            name="Mejor ritmo del bloque", line=dict(color="#B2BEC3", width=1.5),
+            marker=dict(size=6, color="#636E72"), customdata=historico[["Ritmo texto"]],
+            hovertemplate="Bloque iniciado el %{x|%d/%m/%Y}<br>"
+                          "Mejor ritmo %{customdata[0]} min/km<extra></extra>"))
+        fig_prog.add_trace(go.Scatter(
+            x=historico["Inicio"], y=historico["Tendencia"], mode="lines",
+            name="Tendencia de tres bloques", line=dict(color="#2E86DE", width=3),
+            customdata=historico[["Tendencia texto"]],
+            hovertemplate="Tendencia %{customdata[0]} min/km<extra></extra>"))
 
         minimo = int(np.floor(historico["mejor_ritmo"].min()))
         maximo = int(np.ceil(historico["mejor_ritmo"].max()))
@@ -501,18 +551,25 @@ with tab_pred:
 
         # El eje se invierte porque un ritmo menor es un rendimiento mejor.
         fig_prog.update_yaxes(autorange="reversed", tickmode="array",
-                              tickvals=marcas, ticktext=[str(m) for m in marcas])
-
-        fig_prog.update_layout(height=330, margin=dict(t=10))
+                              tickvals=marcas, ticktext=[str(m) for m in marcas],
+                              title_text="Mejor ritmo en min/km")
+        fig_prog.update_layout(height=330, margin=dict(t=10), hovermode="x unified",
+                               legend=dict(orientation="h", y=1.12, x=0))
         st.plotly_chart(fig_prog, width="stretch")
         st.caption(f"Cada punto es un bloque de 28 días, contados desde la primera actividad "
                    f"{origen.strftime('%d/%m/%Y')}. Solo aparecen los bloques con al menos una carrera de 5 km o más. "
-                   "El eje está invertido, cuanto más bajo sea el ritmo, más rápido.")
+                   "El eje está invertido, cuanto más bajo sea el ritmo, más rápido. La línea azul promedia "
+                   "tres bloques seguidos para que se vea hacia dónde vas sin el zigzag de cada mes.")
 
 with tab_pulso:
     st.subheader("Pulso cargado a mano")
     st.caption("Cuando el reloj registra la frecuencia cardíaca pero no la envía a Strava, la serie se puede "
                "pegar aquí.")
+
+    # El aviso se guarda en la sesión porque la recarga que sigue a guardar o borrar
+    # descartaría de inmediato cualquier mensaje mostrado antes de ella.
+    if st.session_state.get("aviso_pulso"):
+        st.success(st.session_state.pop("aviso_pulso"))
 
     pendientes = data_loader.listar_actividades_sin_fc()
     resumen_manual = data_loader.resumen_fc_manual()
@@ -541,8 +598,13 @@ with tab_pulso:
         col_entrada, col_vista = st.columns([1, 1])
 
         with col_entrada:
+            # La clave lleva la actividad y un contador. Con la actividad, cada una tiene su
+            # propio cuadro y el texto de una no se arrastra a la siguiente. Con el contador,
+            # subirlo al guardar crea un cuadro nuevo y vacío.
+            version_texto = st.session_state.get("version_texto_pulso", 0)
             texto_pegado = st.text_area(
                 "Serie de tiempo y pulso",
+                key=f"texto_pulso_{clave}_{version_texto}",
                 height=260,
                 placeholder="Tiempo_de_ruta\tFC_ppm\n00:00:00\t118\n00:00:07\t120\n00:00:26\t129",
                 help="Pega el bloque completo tal como lo copias del reloj. La línea de cabecera "
@@ -561,7 +623,8 @@ with tab_pulso:
                 if guardadas:
                     obtener_datos.clear()
                     st.session_state.version_datos += 1
-                    st.success(mensaje)
+                    st.session_state.version_texto_pulso = version_texto + 1
+                    st.session_state.aviso_pulso = mensaje
                     st.rerun()
                 else:
                     st.error(mensaje)
@@ -573,7 +636,10 @@ with tab_pulso:
                     borradas, mensaje = data_loader.borrar_fc_manual(clave)
                     obtener_datos.clear()
                     st.session_state.version_datos += 1
-                    st.success(mensaje) if borradas else st.error(mensaje)
+                    if borradas:
+                        st.session_state.aviso_pulso = mensaje
+                        st.rerun()
+                    st.error(mensaje)
                     st.rerun()
 
         with col_vista:
@@ -623,6 +689,20 @@ with tab_pulso:
 
                 fig_fc.update_layout(height=240, margin=dict(t=10),
                                      xaxis_title="Tiempo de actividad", yaxis_title="ppm")
+
+                # Cada franja es una zona de la configuración activa, así se ve en qué momento de
+                # la sesión se pasó de una a otra. El rango vertical se fija a mano porque las
+                # franjas de la Z5, que no tiene techo, ampliarían el eje sin control.
+                techo = max(float(pulsos.max()), float(fc_maxima_activa)) + 6
+                piso = max(30.0, float(pulsos.min()) - 8)
+                for (nombre_z, desde_z, hasta_z), color_z in zip(limites_zonas, COLORES_ZONA):
+                    y0, y1 = max(desde_z, piso), min(hasta_z, techo)
+                    if y0 < y1:
+                        fig_fc.add_hrect(y0=y0, y1=y1, fillcolor=color_z, opacity=0.28,
+                                         line_width=0, layer="below",
+                                         annotation_text=nombre_z, annotation_position="top left",
+                                         annotation_font_size=11, annotation_font_color="#636E72")
+                fig_fc.update_yaxes(range=[piso, techo])
                 st.plotly_chart(fig_fc, width="stretch")
 
                 st.caption(f"Serie {origen_vista}: {backend.formatear_duracion_corta(indicadores['duracion_s'])} "
@@ -634,19 +714,30 @@ with tab_pulso:
                 nombres = [nombre for nombre, _, _, _ in metricas_fc.ZONAS]
                 minutos_zona = [indicadores["zonas"][n] / 60 for n in nombres]
 
+                # El rango en pulsaciones va en la etiqueta de cada barra y el porcentaje junto
+                # a los minutos, calculado sobre la duración total de la serie.
+                duracion_min = max(indicadores["duracion_s"] / 60, 1e-9)
+                etiquetas_zona = [f"{n}  {ajustes.texto_rango(r)}"
+                                  for n, r in zip(nombres, limites_zonas)]
+                textos_zona = [f"{m:.0f} min · {100 * m / duracion_min:.0f} %" for m in minutos_zona]
+
                 fig_zonas = go.Figure(go.Bar(
-                    x=minutos_zona, y=nombres, orientation="h",
-                    marker_color=COLORES_ZONA,
-                    hovertemplate="%{y}: %{x:.1f} min<extra></extra>"))
-                fig_zonas.update_layout(height=220, margin=dict(t=10),
+                    x=minutos_zona, y=etiquetas_zona, orientation="h",
+                    marker_color=COLORES_ZONA, text=textos_zona,
+                    textposition="outside", cliponaxis=False,
+                    hovertemplate="%{y}<br>%{x:.1f} min<extra></extra>"))
+                fig_zonas.update_xaxes(range=[0, max(minutos_zona) * 1.35 + 1])
+                fig_zonas.update_layout(height=240, margin=dict(t=10),
                                         xaxis_title="Minutos", yaxis_title="")
                 st.plotly_chart(fig_zonas, width="stretch")
 
                 fuera_de_zona = indicadores["duracion_s"] - sum(indicadores["zonas"].values())
+                
                 if fuera_de_zona > 30:
-                    st.caption(f"{fuera_de_zona / 60:.0f} minutos por debajo del 50 % de la frecuencia "
-                               "máxima quedan fuera del reparto, tal como define el modelo de zonas.")
-
+                    texto_fuera = (f" Además, {fuera_de_zona / 60:.0f} minutos por debajo del inicio de la "
+                               "Z1 no entran en ninguna zona." if fuera_de_zona > 30 else "")
+                    st.caption("Los porcentajes se calculan sobre la duración total de la serie." + texto_fuera)
+                
                 z1, z2 = st.columns(2)
                 z1.metric("TRIMP de Edwards", f"{indicadores['trimp_edwards']:.0f}",
                           help="Suma de los minutos de cada zona por su multiplicador de intensidad "
@@ -801,11 +892,11 @@ with tab_agente:
             except Exception as error:
                 st.error(f"No se pudo consultar al agente: {error}")
 
-            # Muestra exactamente lo que recibió el modelo, para distinguir si un error viene
-            # de los datos o de cómo el modelo los interpretó.
-            with st.expander("🔍 Ver lo que recibió el agente en el último mensaje"):
-                st.code(st.session_state.get("ultimo_contexto", "Todavía no hay mensajes."),
-                        language=None)
+            # Panel de diagnóstico, oculto de la interfaz por ahora. Descomentar si hace falta
+            # depurar por qué el agente respondió algo raro.
+            # with st.expander("🔍 Ver lo que recibió el agente en el último mensaje"):
+            #     st.code(st.session_state.get("ultimo_contexto", "Todavía no hay mensajes."),
+            #             language=None)
                 
 with tab_ajustes:
     st.subheader("Ajustes personales")

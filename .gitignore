@@ -11,4 +11,3 @@ __pycache__/
 .streamlit/secrets.toml
 
 diagnostico.py
-comparar_modelos.py
