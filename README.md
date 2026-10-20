@@ -7,8 +7,8 @@ resultados sobre datos reales.
 
 El proyecto nació como trabajo de la asignatura Fundamentos de Ciencia de Datos e
 Inteligencia Artificial de la carrera de Ciencia de Datos e IA de la UNACH, y después se
-extendió con persistencia en la nube, carga manual de frecuencia cardíaca y métricas
-derivadas de series de pulso.
+extendió con persistencia en la nube, carga manual de frecuencia cardíaca, métricas
+derivadas de series de pulso y ajustes personales.
 
 ## Qué problema resuelve
 
@@ -21,19 +21,25 @@ los indicadores en lugar de con impresiones.
 
 ## Arquitectura
 
-El sistema se organiza en siete módulos con responsabilidades separadas. La capa de
+El sistema se organiza en ocho módulos con responsabilidades separadas. La capa de
 presentación no calcula nada y la capa de cálculo no conoce Streamlit, de modo que el
 análisis se puede ejecutar y probar sin levantar la interfaz.
 
 | Módulo | Responsabilidad |
 |---|---|
-| `app.py` | Interfaz en Streamlit. Cinco pestañas de análisis y el chat del agente. |
-| `backend.py` | Limpieza, normalización, cálculo de carga, ACWR y agregaciones. |
-| `modelo.py` | Componente predictivo. Regresión simple por mesociclos y verificador de viabilidad. |
-| `agente.py` | Construcción del contexto del LLM y persistencia de la conversación. |
-| `data_loader.py` | Adquisición desde la API de Strava y persistencia en Supabase. |
-| `metricas_fc.py` | Funciones puras de análisis de series de frecuencia cardíaca. |
-| `config.py` | Configuración compartida. Zona horaria y utilidades de fecha. |
+| `app.py` | Interfaz en Streamlit. Siete pestañas, entre ellas Ajustes y el chat del agente. |
+| `backend.py` | Limpieza, normalización, cálculo de carga, ACWR, agregaciones y formateadores. |
+| `modelo.py` | Componente predictivo. Regresión simple por mesociclos, validación Leave One Out, Riegel y verificador de viabilidad. |
+| `agente.py` | Construcción del contexto del LLM, detección de cambios entre mensajes y persistencia de la conversación. |
+| `data_loader.py` | Adquisición desde la API de Strava, persistencia en Supabase, pulso manual y lectura y escritura de ajustes. |
+| `metricas_fc.py` | Funciones puras de análisis de series de frecuencia cardíaca y zonas por porcentaje o Karvonen. |
+| `ajustes.py` | Lectura, escritura y valores derivados de los ajustes personales, como la FC máxima efectiva y las zonas. |
+| `config.py` | Configuración compartida. FC máxima de respaldo, zona horaria y utilidades de fecha. |
+
+Además hay dos scripts de consola que no forman parte de la aplicación.
+`comparar_modelos.py` recalcula con el historial del momento las comparaciones que llevaron
+a elegir el modelo de predicción, y `recargar_historial.py` vuelve a descargar todo el
+histórico de Strava como tarea de mantenimiento puntual.
 
 ```mermaid
 graph TD
@@ -42,10 +48,18 @@ graph TD
     app --> agente[agente.py]
     app --> loader[data_loader.py]
     app --> metricas[metricas_fc.py]
+    app --> ajustes[ajustes.py]
+    app --> config[config.py]
     backend --> loader
-    backend --> config[config.py]
+    backend --> metricas
+    backend --> config
+    modelo --> config
     agente --> config
+    ajustes --> loader
+    ajustes --> metricas
+    ajustes --> config
     loader --> metricas
+    loader --> config
 ```
 
 `metricas_fc.py` existe como módulo aparte por una razón concreta. Las funciones de
@@ -62,13 +76,15 @@ El sistema combina tres orígenes.
 y descarga las actividades posteriores a la última registrada mediante el parámetro
 `after`. La paginación es de 200 elementos por página. La descarga se aplica sobre
 Supabase con `upsert` sobre la columna `fecha_actividad`, que es única, de modo que el
-solape de tres días que se aplica por seguridad no genera duplicados. Actualmente la
-tabla contiene 1537 actividades, desde el 09/10/2020 hasta el 29/08/2026.
+solape de tres días que se aplica por seguridad no genera duplicados. La tabla cubre el
+histórico completo desde octubre de 2020, y cada fila guarda también el identificador de
+Strava en `strava_id`.
 
 **Export histórico de Strava.** Archivo `actividades_strava.csv` con el volcado completo
 de la cuenta. Contiene datos deportivos personales reales. Desde que la sincronización
 cubre todo el historial, este archivo solo aporta las actividades anteriores al primer
-registro descargado por la API.
+registro descargado por la API. En la práctica aporta cero filas y se conserva como copia
+de seguridad.
 
 **Carga manual de frecuencia cardíaca.** El reloj utilizado no exporta el pulso a Strava
 en todas las actividades, por lo que la interfaz permite pegar la serie de tiempo y
@@ -90,7 +106,9 @@ create table actividades_sincronizadas (
   tiempo_transcurrido_s double precision,
   desnivel_positivo_m double precision,
   fc_promedio double precision,
-  velocidad_promedio double precision
+  velocidad_promedio double precision,
+  fc_maxima double precision,
+  strava_id bigint
 );
 
 create table fc_manual (
@@ -113,9 +131,24 @@ create table diario_estado (
   estado text not null,
   nota text default ''
 );
+
+create table ajustes (
+  id smallint primary key default 1 check (id = 1),
+  fecha_nacimiento date,
+  fc_maxima_medida smallint,
+  fc_reposo smallint,
+  modelo_zonas text not null default 'fcmax',
+  deporte_defecto text not null default 'Carrera',
+  periodo_defecto text not null default 'Todo el histórico',
+  actividades_agente smallint not null default 20,
+  retencion_diario smallint not null default 30,
+  actualizado_en timestamptz not null default now()
+);
+
+insert into ajustes (id) values (1);
 ```
 
-Dos decisiones del esquema conviene justificarlas.
+Varias decisiones del esquema conviene justificarlas.
 
 La frecuencia cardíaca manual vive en una tabla separada y no como columnas de
 `actividades_sincronizadas`. La razón es que `upsert` reemplaza la fila completa, así que
@@ -133,6 +166,10 @@ repartidos entre el CSV del repositorio y Supabase, de modo que una restricción
 integridad rechazaría cualquier serie asociada a una actividad histórica. Se sacrifica
 integridad referencial a cambio de cobertura, y el precio es que una clave mal escrita
 produce muestras huérfanas en vez de un error.
+
+La tabla `ajustes` tiene una sola fila, forzada por `check (id = 1)`, porque solo hay un
+atleta. La aplicación la modifica con `update` y nunca la inserta, así que la fila tiene
+que existir desde el principio, y de eso se encarga el `insert` del final del bloque.
 
 ## Indicadores implementados
 
@@ -165,12 +202,15 @@ consistencia entre métodos.
 **Verificador de viabilidad.** No proyecta un volumen de entrenamiento porque el historial
 no sostiene esa relación, según la misma comparación de `comparar_modelos.py`. Contrasta el
 ritmo que exige una meta contra la progresión histórica real del atleta, medida como la
-mejora típica entre bloques separados por una, dos, tres y seis mesociclos.
+mejora típica entre bloques separados por uno, dos y tres mesociclos. El informe de
+`comparar_modelos.py` añade además el plazo de seis.
 
 **Zonas de intensidad y TRIMP de Edwards.** Sobre las series de pulso cargadas a mano se
-reparte la duración en cinco zonas por porcentaje de la frecuencia cardíaca máxima, y se
-calcula el TRIMP de Edwards (1993) ponderando los minutos de cada zona por un
-multiplicador de 1 a 5.
+reparte la duración en cinco zonas, calculadas por porcentaje de la frecuencia cardíaca
+máxima o por el método de Karvonen sobre la reserva cardíaca, según lo que se elija en
+Ajustes. El TRIMP de Edwards (1993) pondera los minutos de cada zona por un multiplicador
+de 1 a 5 y se calcula siempre sobre porcentaje de la frecuencia máxima, porque sus
+multiplicadores están definidos sobre esas fronteras.
 
 **Media ponderada por tiempo.** El trazado manual produce muestras a intervalos
 irregulares, así que un promedio aritmético sobrepondera los tramos con más muestras. La
@@ -183,11 +223,18 @@ interfaz advierte que el esfuerzo no fue continuo y que el valor no es interpret
 
 ## Agente conversacional
 
-El agente usa la API de Anthropic con el modelo `claude-haiku-4-5`. No opera como un
+El agente usa la API de Anthropic con el modelo `claude-sonnet-5`. No opera como un
 chatbot aislado, recibe un contexto construido con la salida real de los módulos
-analíticos, que incluye el ACWR y su interpretación, los volúmenes de 7 y 28 días, la
-cobertura de pulsómetro, el detalle de las cinco últimas actividades con desnivel y tiempo
-total, la predicción del modelo con su fiabilidad declarada y el diario de estado físico.
+analíticos, que incluye el ACWR y su interpretación, los volúmenes de 7 y 28 días, las
+horas de los últimos 28 días, la cobertura de pulsómetro, el detalle de las últimas
+actividades con desnivel, tiempo total, pulso y zona media, la predicción del modelo con
+su fiabilidad declarada y el diario de estado físico. Cuántas actividades recibe se fija
+en Ajustes, veinte por defecto.
+
+Entre un mensaje y el siguiente el sistema compara el pulso de esas actividades. Si cambió,
+por ejemplo porque se cargó una serie a mano, se lo avisa al agente de forma explícita,
+porque un modelo de lenguaje tiende a sostener lo que ya dijo aunque el contexto nuevo
+diga otra cosa.
 
 El prompt le prohíbe inventar datos que no aparezcan en ese contexto y le indica priorizar
 el estado declarado por el deportista sobre los indicadores numéricos. La fecha actual se
@@ -245,9 +292,11 @@ interpolan de forma lineal. En la serie del 20/08/2026 hay un vacío de casi tre
 donde el pulso real se desconoce.
 
 **Frecuencia cardíaca máxima de referencia.** Las zonas y el TRIMP de Edwards dependen por
-completo de este valor. Por defecto se propone el máximo observado en las series ya
-cargadas, que casi con seguridad queda por debajo del máximo fisiológico real, ya que solo
-refleja los esfuerzos transcritos. El campo se puede corregir a mano en la interfaz.
+completo de este valor. Se decide en este orden. Primero el máximo medido que el atleta
+haya guardado en Ajustes. Si no hay, la estimación de Tanaka por edad, que necesita la
+fecha de nacimiento. Si tampoco hay fecha, una constante de respaldo en `config.py`. La
+fórmula de Tanaka se desvía varios latidos de una persona a otra, por eso un valor medido
+siempre manda sobre ella.
 
 **El TRIMP de Edwards no alimenta el ACWR.** El ratio agudo crónico solo tiene sentido si
 numerador y denominador comparten escala. Como únicamente unas pocas sesiones tienen serie
@@ -266,8 +315,10 @@ se toma como fuente autoritativa y el CSV solo aporta lo anterior a su primer re
 
 **Actividades con la misma hora de inicio.** La clave única de la tabla es
 `fecha_actividad`, pero Strava admite dos actividades que empiecen en el mismo instante.
-En ese caso se conserva una sola. La clave verdaderamente única sería el identificador de
-Strava, que no se está almacenando.
+En ese caso se conserva una sola. La clave verdaderamente única es el identificador de
+Strava, que ya se guarda en `strava_id` pero todavía no se usa como clave. Cambiarla
+obliga a cambiar también cómo se enlaza `fc_manual`, que hoy apunta a `fecha_actividad`,
+así que queda pendiente como un cambio completo. Afecta a menos del 0.2 % del historial.
 
 **Suspensión por inactividad.** Tanto el proyecto de Supabase como la aplicación de
 Streamlit Community Cloud se suspenden tras varios días sin uso. No hay pérdida de datos,

@@ -1,16 +1,16 @@
 """
 Configuración compartida del SII Athletix.
 
-Centraliza los valores que necesitan más de un módulo. Hoy solo contiene el
-manejo de la fecha: tanto el backend como el agente deben razonar sobre el día
-del atleta, y no sobre el del servidor donde corre la aplicación.
+Centraliza los valores que necesitan más de un módulo. Contiene la FC máxima de
+respaldo y el manejo de la fecha: tanto el backend como el agente deben razonar
+sobre el día del atleta, y no sobre el del servidor donde corre la aplicación.
 """
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# Frecuencia cardíaca máxima estimada con la fórmula de Tanaka et al. (2001),
-# FCmax = 208 - 0.7 x edad, más ajustada que 220 - edad en personas entrenadas.
+# FC máxima medida con pulsómetro. La aplicación prioriza la guardada en Ajustes, luego
+# Tanaka por edad, y este valor solo entra si Ajustes no tiene ninguna de las dos.
 FC_MAXIMA = 199
 
 # Streamlit Community Cloud ejecuta en UTC. Sin anclar la zona, entre las 19:00 y la

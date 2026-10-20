@@ -2,9 +2,9 @@
 Frontend del SII Athletix.
 
 Capa de presentación del sistema: panel de indicadores, análisis de carga,
-componente predictivo con planificador de mesociclo, carga manual de pulso y
-agente conversacional. Toda la lógica vive en backend.py, modelo.py, agente.py,
-data_loader.py y metricas_fc.py.
+componente predictivo con verificador de viabilidad, carga manual de pulso,
+agente conversacional y ajustes personales. Toda la lógica vive en backend.py,
+modelo.py, agente.py, data_loader.py, metricas_fc.py y ajustes.py.
 """
 
 import os
@@ -345,8 +345,6 @@ with tab_carga:
                                    xaxis_title="", yaxis_tickformat=".1f", yaxis_range=[0, 2.5])
             st.plotly_chart(fig_acwr, width="stretch")
 
-# Bloque completo de la pestaña Predicción y Plan. Reemplaza desde "with tab_pred:" hasta,
-# sin incluirla, la línea "with tab_pulso:".
 
 def segundos_texto(min_km):
     """Convierte una diferencia de ritmo en segundos por kilómetro legibles."""
@@ -732,12 +730,12 @@ with tab_pulso:
                 st.plotly_chart(fig_zonas, width="stretch")
 
                 fuera_de_zona = indicadores["duracion_s"] - sum(indicadores["zonas"].values())
-                
+
                 if fuera_de_zona > 30:
-                    texto_fuera = (f" Además, {fuera_de_zona / 60:.0f} minutos por debajo del inicio de la "
-                               "Z1 no entran en ninguna zona." if fuera_de_zona > 30 else "")
-                    st.caption("Los porcentajes se calculan sobre la duración total de la serie." + texto_fuera)
-                
+                    st.caption("Los porcentajes se calculan sobre la duración total de la serie. "
+                               f"Además, {fuera_de_zona / 60:.0f} minutos por debajo del inicio de la "
+                               "Z1 no entran en ninguna zona.")
+
                 z1, z2 = st.columns(2)
                 z1.metric("TRIMP de Edwards", f"{indicadores['trimp_edwards']:.0f}",
                           help="Suma de los minutos de cada zona por su multiplicador de intensidad "
