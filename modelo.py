@@ -225,7 +225,10 @@ def progresion_historica(datos, meses):
             no hay al menos tres pares para no ofrecer una cifra sin respaldo.
     """
     serie = datos["mejor_ritmo"]
-    diferencias = (serie.shift(meses) - serie).dropna()
+    # Se desplaza por número de mesociclo y no por posición, porque el dataset trae huecos
+    # y dos filas vecinas pueden estar separadas por meses sin carreras válidas.
+    previa = pd.Series(serie.to_numpy(), index=serie.index + meses)
+    diferencias = (previa - serie).dropna()
     if len(diferencias) < 3:
         return None
     return {"mejora_media_min_km": float(diferencias.mean()), "pares": int(len(diferencias))}
