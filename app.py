@@ -635,7 +635,8 @@ with tab_pred:
         st.caption(f"Cada punto es un bloque de 28 días, contados desde la primera actividad "
                    f"{origen.strftime('%d/%m/%Y')}. Solo aparecen los bloques con al menos una carrera de 5 km o más. "
                    "El eje está invertido, cuanto más bajo sea el ritmo, más rápido. La línea azul promedia "
-                   "tres bloques seguidos para que se vea hacia dónde vas sin el zigzag de cada mes.")
+                   "tres bloques seguidos para que se vea hacia dónde vas sin el zigzag de cada mes. "
+                   "La línea se corta en los meses en los que no hubo ninguna carrera válida.")
 
 with tab_pulso:
     st.subheader("Pulso cargado a mano")

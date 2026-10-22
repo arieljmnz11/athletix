@@ -358,8 +358,10 @@ def calcular_kpis(df, hoy=None):
     if df.empty:                                                                   # Protege contra filtros sin resultados
         return kpis                                                                # Devuelve solo el conteo
 
-    ultimos_7 = df[df["Fecha"] >= hoy - pd.Timedelta(days=7)]                      # Ventana móvil de 7 días
-    ultimos_28 = df[df["Fecha"] >= hoy - pd.Timedelta(days=28)]                    # Ventana móvil de 28 días
+    # Hoy cuenta como uno de los días de la ventana, igual que en la media móvil del ACWR,
+    # así que se restan seis y veintisiete días. Con siete y veintiocho entraba un día de más.
+    ultimos_7 = df[df["Fecha"] >= hoy - pd.Timedelta(days=6)]                      # Hoy y los 6 días anteriores
+    ultimos_28 = df[df["Fecha"] >= hoy - pd.Timedelta(days=27)]                    # Hoy y los 27 días anteriores
 
     kpis["km_7d"] = ultimos_7["Distancia_km"].sum()                                # Volumen de la última semana
     kpis["km_28d"] = ultimos_28["Distancia_km"].sum()                              # Volumen del último mesociclo
