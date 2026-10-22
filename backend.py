@@ -37,6 +37,11 @@ UMBRAL_OPTIMO_BAJO = 0.8                                                        
 UMBRAL_OPTIMO_ALTO = 1.3                                                           # Límite superior de la zona óptima
 UMBRAL_RIESGO = 1.5                                                                # Por encima, alto riesgo de lesión
 
+# Números en letra para escribir la antigüedad de una marca. Uno va apocopado porque
+# siempre precede a un sustantivo, como en "un año".
+NUMEROS_EN_LETRA = ["cero", "un", "dos", "tres", "cuatro", "cinco", "seis", "siete",
+                    "ocho", "nueve", "diez", "once"]
+
 def _fecha_referencia(hoy=None):
     """
     Normaliza la fecha desde la que se miden las ventanas móviles.
@@ -317,6 +322,33 @@ def formatear_duracion_corta(segundos):
     minutos_totales = int(round(float(segundos) / 60))                             # Redondea al minuto más cercano
     horas, minutos = divmod(minutos_totales, 60)                                   # Separa horas completas y resto
     return f"{horas}h{minutos:02d}min" if horas else f"{minutos}min"               # Omite las horas cuando no las hay
+
+def antiguedad_en_texto(fecha, hoy=None):
+    """Expresa en palabras cuánto hace de una fecha, o None si no llega a un año.
+
+    Una marca vieja con solo su fecha obliga a hacer la cuenta y se lee como si fuera la
+    forma de hoy, por eso a partir de un año se escribe también la antigüedad.
+
+    Args:
+        fecha: Fecha de la marca, cualquier valor que acepte pd.Timestamp.
+        hoy: Fecha de referencia. Si es None se toma el día local del atleta.
+    Returns:
+        str | None: Texto como 'hace dos años y dos meses', o None por debajo de un año.
+    """
+    hoy = _fecha_referencia(hoy)
+    fecha = pd.Timestamp(fecha).normalize()
+    # Un mes solo cuenta como cumplido al llegar al mismo día del mes.
+    meses = (hoy.year - fecha.year) * 12 + hoy.month - fecha.month - (hoy.day < fecha.day)
+    años, meses = divmod(meses, 12)
+    if años < 1:
+        return None
+
+    def _cantidad(numero, singular, plural):
+        palabra = NUMEROS_EN_LETRA[numero] if numero < len(NUMEROS_EN_LETRA) else str(numero)
+        return f"{palabra} {singular if numero == 1 else plural}"
+
+    texto = f"hace {_cantidad(años, 'año', 'años')}"
+    return texto + (f" y {_cantidad(meses, 'mes', 'meses')}" if meses else "")
 
 def calcular_kpis(df, hoy=None):
     """Calcula los indicadores numéricos del panel principal."""

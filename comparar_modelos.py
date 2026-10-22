@@ -328,19 +328,35 @@ def seccion_produccion(df):
         print(f"  Mejor ritmo del bloque anterior : {metricas['mejor_ritmo_previo']:.2f} min/km")
         print(f"  Ritmo predicho para este bloque : {ritmo:.2f} min/km\n")
 
-    parrafo("El verificador de viabilidad compara una meta contra lo que el historial dice que "
-            "sueles mejorar. Esta tabla mide, para cada par de bloques separados por esa "
-            "cantidad de meses, cuánto bajó o subió el mejor ritmo, y promedia.")
-    print(f"  {'Plazo':<22}{'Mejora típica':>16}{'Pares medidos':>16}")
+    parrafo("El verificador de viabilidad compara la meta contra tus mejores marcas reales y no "
+            "contra la progresión mes a mes. Esta tabla explica por qué. Mide, para cada par de "
+            "bloques separados por esa cantidad de meses, cuánto bajó o subió el mejor ritmo, y "
+            "promedia. El error estándar dice cuánto podría moverse ese promedio solo por azar, y "
+            "mientras la mejora típica quede por debajo de él no se distingue de cero.")
+    print(f"  {'Plazo':<22}{'Mejora típica':>22}{'Error estándar':>16}{'Pares medidos':>16}")
     for meses in (1, 2, 3, 6):
         progresion = modelo.progresion_historica(entrenamiento["datos"], meses)
+        etiqueta = f"{meses} mesociclo" + ("s" if meses > 1 else "")
         if progresion:
             signo = progresion["mejora_media_min_km"]
-            texto = f"{abs(signo) * 60:.0f} s/km " + ("más rápido" if signo > 0 else "más lento")
-            print(f"  {f'{meses} mesociclo' + ('s' if meses > 1 else ''):<22}{texto:>16}{progresion['pares']:>16}")
+            segundos_mejora = round(abs(signo) * 60)
+            texto = (f"{segundos_mejora} s/km " + ("más rápido" if signo > 0 else "más lento")
+                     if segundos_mejora else "sin diferencia")
+            error = f"{progresion['error_estandar_min_km'] * 60:.0f} s/km"
+            print(f"  {etiqueta:<22}{texto:>22}{error:>16}{progresion['pares']:>16}")
         else:
-            print(f"  {f'{meses} mesociclos':<22}{'sin pares suficientes':>16}")
+            print(f"  {etiqueta:<22}{'sin pares suficientes':>22}")
     print()
+
+    ruido = modelo.ruido_entre_bloques(entrenamiento["datos"])
+    if ruido:
+        conclusion = ("Todas las mejoras típicas de 1 a 3 mesociclos quedan por debajo de su error, "
+                      "así que la progresión mes a mes no se puede medir con este historial."
+                      if ruido["indistinguible"] else
+                      "Alguna mejora típica de 1 a 3 mesociclos ya supera su error. Conviene revisar "
+                      "si el verificador debería volver a tenerla en cuenta.")
+        parrafo(f"De un bloque al siguiente el mejor ritmo cambia de media "
+                f"{ruido['cambio_medio_min_km'] * 60:.0f} s/km. {conclusion}")
 
 
 def cierre():

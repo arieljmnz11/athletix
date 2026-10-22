@@ -354,6 +354,18 @@ def segundos_texto(min_km):
     return f"{segundos} s por km " + ("más rápido" if min_km > 0 else "más lento")
 
 
+def fecha_de_marca(fecha):
+    """Formatea la fecha de una marca y, si pasa de un año, añade cuánto hace en palabras."""
+    antiguedad = backend.antiguedad_en_texto(fecha)
+    texto = fecha.strftime("%d/%m/%Y")
+    return f"{texto}, {antiguedad}" if antiguedad else texto
+
+
+def segundos_minimos(min_km):
+    """Redondea una diferencia de ritmo a segundos por km sin bajar de uno."""
+    return max(1, round(abs(min_km) * 60))
+
+
 with tab_pred:
     st.subheader("Predicción de rendimiento por mesociclo")
     st.caption("Regresión simple validada con Leave-One-Out donde el mejor ritmo del mesociclo "
@@ -418,6 +430,14 @@ with tab_pred:
                 r2.metric("Ritmo de competición",
                           f"{backend.formatear_ritmo(ritmo_mostrado)} min/km")
 
+                # El margen describe el error de esta estimación, así que va junto a ella y no
+                # en el verificador, que ahora se mide contra marcas reales.
+                margen = entrenamiento["mae"] * escala_distancia
+                st.caption(f"El modelo suele equivocarse unos {margen * 60:.0f} segundos por "
+                           f"kilómetro, el mismo error medio de arriba. Lo razonable es pensar en "
+                           f"un ritmo entre {backend.formatear_ritmo(ritmo_mostrado - margen)} y "
+                           f"{backend.formatear_ritmo(ritmo_mostrado + margen)} min/km.")
+
             if modelo.fuera_de_rango_calibrado(distancia):
                 st.warning(f"⚠️ El modelo está calibrado con esfuerzos de {modelo.RANGO_CALIBRADO[0]} a "
                            f"{modelo.RANGO_CALIBRADO[1]} km. La proyección a {distancia:g} km es una extrapolación "
@@ -427,8 +447,9 @@ with tab_pred:
 
             st.divider()
             st.subheader("🎯 Verificador de viabilidad")
-            st.caption("Contrasta una meta contra tu progresión histórica real. No proyecta un volumen "
-                       "de entrenamiento porque el historial no sostiene esa relación. Tus bloques "
+            st.caption("Contrasta una meta contra tus mejores marcas reales, medidas con tiempo total. "
+                       "No proyecta un volumen de entrenamiento porque el historial no sostiene esa "
+                       "relación. Tus bloques "
                        "entrenan cantidades parecidas cada mes, y sin meses de mucho y de poco volumen "
                        "no hay contraste para medir cuánto mejora el ritmo por cada kilómetro extra. "
                        "Que no se pueda medir con estos datos no significa que el volumen no importe.")
@@ -454,65 +475,114 @@ with tab_pred:
                 with v2:
                     st.info("Fija una meta de al menos 10 minutos para verificarla.")
             else:
-                verificacion = modelo.verificar_viabilidad(entrenamiento, metricas, meta_min, distancia)
+                marcas = modelo.mejores_marcas(datos_completos)
+                verificacion = modelo.verificar_viabilidad(marcas, meta_min, distancia)
 
                 with v2:
-                    if not verificacion["viable"]:
-                        st.error(verificacion["mensaje"])
+                    if verificacion is None:
+                        st.error(f"No hay carreras llanas de {modelo.DISTANCIA_MINIMA_MARCA:g} km o más "
+                                 "con las que comparar la meta.")
                     else:
-                        mejora_exigida = verificacion["mejora_exigida_min_km"]
-                        diferencia_total = tiempo - meta_min
+                        referencia = verificacion["referencia"]
+                        origen = verificacion["proyectada_desde"]
+                        exigido = verificacion["exigido_min_km"]
+                        ritmo_ref = backend.formatear_ritmo(referencia["ritmo"])
+                        desde, hasta = modelo.TRAMOS_MARCA[distancia]
 
                         c1, c2, c3 = st.columns(3)
-                        c1.metric("Ritmo estimado", f"{backend.formatear_ritmo(ritmo_mostrado)} min/km",
-                                  help="Es el ritmo que el modelo calcula para ti en esta distancia, "
-                                       "el mismo que aparece arriba.")
+                        # El ritmo estimado ya aparece arriba como ritmo de competición, y dentro del
+                        # verificador era una segunda vara de medir que contradecía a la marca real.
+                        # c1.metric("Ritmo estimado", f"{backend.formatear_ritmo(ritmo_mostrado)} min/km",
+                        #           help="Es el ritmo que el modelo calcula para ti en esta distancia, "
+                        #                "el mismo que aparece arriba.")
+                        c1.metric(f"Proyección a {distancia:g} km" if origen else f"Mejor marca en {distancia:g} km",
+                                  f"{ritmo_ref} min/km",
+                                  help="Se mide con tiempo total, paradas incluidas, porque es el que cuenta "
+                                       "como marca en competición. Solo entran carreras con menos de "
+                                       f"{modelo.PENDIENTE_MAXIMA_MARCA:.0f} m de subida por kilómetro.")
                         c2.metric("Ritmo de la meta", f"{backend.formatear_ritmo(meta_min / distancia)} min/km")
                         c3.metric("Lo que exige la meta",
-                                  segundos_texto(mejora_exigida) if mejora_exigida > 0 else "Nada, ya la cumples",
-                                  help="Resta entre tu ritmo estimado y el ritmo de la meta, expresada "
-                                       "en segundos por kilómetro. Si la meta es más lenta que tu "
-                                       "estimación no exige nada.")
+                                  segundos_texto(exigido) if exigido > 0 else "Nada, ya la cumples",
+                                  help="Resta entre tu mejor marca del tramo y el ritmo de la meta, en "
+                                       "segundos por kilómetro. Si el tramo no tiene marcas se usa la "
+                                       "proyección. Si la meta es más lenta no exige nada.")
 
-                        if diferencia_total > 0:
-                            st.caption(f"En los {distancia:g} km son {modelo.formatear_tiempo(diferencia_total)} "
-                                       "menos que tu tiempo estimado.")
+                        # diferencia_total = tiempo - meta_min
+                        # if diferencia_total > 0:
+                        #     st.caption(f"En los {distancia:g} km son {modelo.formatear_tiempo(diferencia_total)} "
+                        #                "menos que tu tiempo estimado.")
 
-                        margen = verificacion["margen_error"] * escala_distancia
-                        st.caption(f"El modelo suele equivocarse unos {margen * 60:.0f} segundos por "
-                                   f"kilómetro, el mismo error medio de arriba. Lo razonable es pensar en "
-                                   f"un ritmo entre {backend.formatear_ritmo(ritmo_mostrado - margen)} y "
-                                   f"{backend.formatear_ritmo(ritmo_mostrado + margen)} min/km.")
+                        if origen:
+                            st.info(f"No tienes carreras llanas de entre {desde:g} y {hasta:g} km. La referencia "
+                                    f"sale de proyectar con la fórmula de Riegel tu mejor {origen['tramo']:g} km, "
+                                    f"del {fecha_de_marca(origen['fecha'])}, y da "
+                                    f"{modelo.formatear_tiempo(referencia['tiempo_min'])} a {ritmo_ref} min/km.")
 
-                        referencias = verificacion["referencias"]
-                        if referencias:
-                            filas_ref = [{
-                                "Plazo": f"{meses} mesociclo" + ("s" if meses > 1 else "")
-                                         + f", unas {meses * 4} semanas",
-                                "Lo que sueles mejorar en ese plazo": segundos_texto(ref["mejora_media_min_km"]),
-                                "Medido sobre": f"{ref['pares']} bloques de tu historial",
-                            } for meses, ref in sorted(referencias.items())]
-                            st.dataframe(pd.DataFrame(filas_ref), width="stretch", hide_index=True)
-
-                            # Se compara contra el plazo más largo disponible, el más permisivo, porque
-                            # sin un objetivo con fecha el sistema no sabe cuántas semanas quedan de verdad.
-                            plazo_max = max(referencias)
-                            tipica = referencias[plazo_max]["mejora_media_min_km"]
-
-                            if mejora_exigida <= 0:
-                                st.success("✅ Tu ritmo estimado ya alcanza esta meta.")
-                            elif mejora_exigida <= max(tipica, 0.01):
-                                st.success(f"✅ Está en línea con lo que sueles mejorar en "
-                                           f"{plazo_max} mesociclos. Meta razonable con el tiempo suficiente.")
-                            elif mejora_exigida <= 2 * max(tipica, 0.01):
-                                st.warning(f"⚠️ Exige más del doble de lo que sueles mejorar en {plazo_max} "
-                                           "mesociclos. Es alcanzable con más tiempo o revisando la meta.")
-                            else:
-                                st.error(f"⚠️ Muy por encima de tu progresión histórica en {plazo_max} "
-                                         "mesociclos. Considera una meta más conservadora o un plazo mayor.")
+                        ventaja = round(-exigido * 60)
+                        if verificacion["caso"] == "hecha" and origen:
+                            st.success("✅ La proyección ya alcanza esta meta, "
+                                       + (f"va {ventaja} s por km más rápido." if ventaja else "al mismo ritmo."))
+                        elif verificacion["caso"] == "hecha":
+                            st.success(f"✅ Ya la hiciste. Corriste {referencia['distancia']:.2f} km a {ritmo_ref} "
+                                       f"min/km el {fecha_de_marca(referencia['fecha'])}, "
+                                       + (f"{ventaja} s por km más rápido que esta meta." if ventaja
+                                          else "al mismo ritmo que esta meta."))
+                        elif verificacion["caso"] == "mejor_marca" and origen:
+                            st.warning(f"⚠️ Sería mejor que tu proyección por {segundos_minimos(exigido)} s por km.")
+                        elif verificacion["caso"] == "mejor_marca":
+                            st.warning(f"⚠️ Sería tu mejor marca en {distancia:g} km. Tu mejor ritmo en ese tramo "
+                                       f"es {ritmo_ref} min/km, del {fecha_de_marca(referencia['fecha'])}, y la "
+                                       f"meta pide ir {segundos_minimos(exigido)} s por km más rápido.")
                         else:
-                            st.caption("Aún no hay suficiente historial consecutivo para medir tu "
-                                       "progresión típica y dar una referencia.")
+                            mas_rapida = verificacion["mas_rapida"]
+                            st.error(f"⚠️ Está {segundos_minimos(verificacion['exceso_min_km'])} s por km por "
+                                     "encima de cualquier cosa que hayas corrido. Lo más rápido que tienes es "
+                                     f"{backend.formatear_ritmo(mas_rapida['ritmo'])} min/km, del "
+                                     f"{fecha_de_marca(mas_rapida['fecha'])}.")
+
+                        if not origen:
+                            st.caption(f"Medido sobre {referencia['carreras']} carreras llanas de entre "
+                                       f"{desde:g} y {hasta:g} km.")
+
+                        # La frase se calcula en cada carga y solo aparece mientras sea cierta.
+                        ruido = modelo.ruido_entre_bloques(entrenamiento["datos"])
+                        if ruido and ruido["indistinguible"]:
+                            st.caption("La progresión mes a mes no se puede medir con este historial. El mejor "
+                                       f"ritmo cambia unos {ruido['cambio_medio_min_km'] * 60:.0f} s/km de un "
+                                       "bloque al siguiente y cualquier mejora típica queda por debajo de su "
+                                       "propio error.")
+
+                        # La progresión típica no se distingue del ruido entre bloques, así que la tabla
+                        # y su veredicto dejan de mostrarse. Sus números siguen en comparar_modelos.py.
+                        # referencias = verificacion["referencias"]
+                        # if referencias:
+                        #     filas_ref = [{
+                        #         "Plazo": f"{meses} mesociclo" + ("s" if meses > 1 else "")
+                        #                  + f", unas {meses * 4} semanas",
+                        #         "Lo que sueles mejorar en ese plazo": segundos_texto(ref["mejora_media_min_km"]),
+                        #         "Medido sobre": f"{ref['pares']} bloques de tu historial",
+                        #     } for meses, ref in sorted(referencias.items())]
+                        #     st.dataframe(pd.DataFrame(filas_ref), width="stretch", hide_index=True)
+                        #
+                        #     # Se compara contra el plazo más largo disponible, el más permisivo, porque
+                        #     # sin un objetivo con fecha el sistema no sabe cuántas semanas quedan de verdad.
+                        #     plazo_max = max(referencias)
+                        #     tipica = referencias[plazo_max]["mejora_media_min_km"]
+                        #
+                        #     if mejora_exigida <= 0:
+                        #         st.success("✅ Tu ritmo estimado ya alcanza esta meta.")
+                        #     elif mejora_exigida <= max(tipica, 0.01):
+                        #         st.success(f"✅ Está en línea con lo que sueles mejorar en "
+                        #                    f"{plazo_max} mesociclos. Meta razonable con el tiempo suficiente.")
+                        #     elif mejora_exigida <= 2 * max(tipica, 0.01):
+                        #         st.warning(f"⚠️ Exige más del doble de lo que sueles mejorar en {plazo_max} "
+                        #                    "mesociclos. Es alcanzable con más tiempo o revisando la meta.")
+                        #     else:
+                        #         st.error(f"⚠️ Muy por encima de tu progresión histórica en {plazo_max} "
+                        #                  "mesociclos. Considera una meta más conservadora o un plazo mayor.")
+                        # else:
+                        #     st.caption("Aún no hay suficiente historial consecutivo para medir tu "
+                        #                "progresión típica y dar una referencia.")
 
         st.divider()
         st.subheader("Progresión: mejor ritmo por mesociclo")

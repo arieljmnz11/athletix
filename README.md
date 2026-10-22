@@ -199,11 +199,16 @@ la comparación completa con el historial del momento, incluido el intento de ca
 factor de desnivel para las carreras de montaña, que de momento no superó la prueba de
 consistencia entre métodos.
 
-**Verificador de viabilidad.** No proyecta un volumen de entrenamiento porque el historial
-no sostiene esa relación, según la misma comparación de `comparar_modelos.py`. Contrasta el
-ritmo que exige una meta contra la progresión histórica real del atleta, medida como la
-mejora típica entre bloques separados por uno, dos y tres mesociclos. El informe de
-`comparar_modelos.py` añade además el plazo de seis.
+**Verificador de viabilidad.** Compara una meta contra la mejor marca real del atleta en el
+tramo de distancia que le corresponde, medida con tiempo total porque es el que cuenta como
+marca de carrera. Dice si la meta ya se hizo y cuándo, si sería una mejor marca y por
+cuánto, o si está por encima de cualquier cosa corrida. Las carreras con mucha subida por
+kilómetro no cuentan como marca, porque sin el Grade Adjusted Pace su ritmo no se puede
+comparar con el llano. Si un tramo no tiene marcas, la referencia se proyecta con la
+fórmula de Riegel desde el tramo con marcas más parecido, y la interfaz lo dice. Antes
+comparaba contra la mejora típica entre bloques, pero `comparar_modelos.py` muestra que esa
+progresión no se distingue del ruido de un mes al siguiente. Tampoco proyecta un volumen de
+entrenamiento, porque el historial no sostiene esa relación.
 
 **Zonas de intensidad y TRIMP de Edwards.** Sobre las series de pulso cargadas a mano se
 reparte la duración en cinco zonas, calculadas por porcentaje de la frecuencia cardíaca

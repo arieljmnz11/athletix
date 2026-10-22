@@ -8,8 +8,8 @@ introduciría un análisis semanal previo a competición.
 Incluye:
     - Entrenamiento y validación cruzada Leave-One-Out del modelo.
     - Conversión del ritmo predicho a cualquier distancia mediante Riegel.
-    - Verificador de viabilidad: contrasta una meta contra la progresión
-      histórica real del atleta, sin proyectar un volumen de entrenamiento.
+    - Verificador de viabilidad: contrasta una meta contra la mejor marca real
+      del atleta en su tramo de distancia, medida con tiempo total.
 
 Nota metodológica, registrada tras comparar seis variantes con validación
 cruzada Leave-One-Out sobre el mismo conjunto de mesociclos:
@@ -43,6 +43,13 @@ Por esto el módulo pasó de una regresión de tres variables a una de una sola
 variable, y el planificador inverso, que despejaba el volumen semanal de una
 ecuación que ya no existe, se convirtió en un verificador de viabilidad que
 no proyecta kilómetros, solo contrasta la meta contra la progresión medida.
+
+Después se comprobó que esa progresión, la mejora típica entre bloques separados
+por uno, dos o tres mesociclos, no se distingue de cero: la variación del mejor
+ritmo de un bloque al siguiente es mucho mayor que cualquier mejora media, que
+queda por debajo de su propio error estándar. El verificador pasó entonces a
+comparar la meta contra las mejores marcas reales por tramo de distancia, que
+son un hecho medido y no una tendencia.
 """
 
 import numpy as np
@@ -61,6 +68,15 @@ RANGO_CALIBRADO = (5, 12)              # Rango de distancias con historial sufic
 MESOCICLOS_MINIMOS = 10                # Muestra mínima para un entrenamiento honesto
 
 CARACTERISTICAS = ["mejor_ritmo_previo"]   # Única variable que superó ambas referencias
+
+# Tramos alineados con el selector de la pestaña. Empiezan un 2 % por debajo por el error
+# del GPS y acaban en 1.4 veces la distancia, para que una tirada larga no pase por marca.
+TRAMOS_MARCA = {5.0: (4.9, 7.0), 10.0: (9.8, 14.0), 15.0: (14.7, 20.7), 21.1: (20.7, 29.5)}
+DISTANCIA_MINIMA_MARCA = min(desde for desde, _ in TRAMOS_MARCA.values())
+
+# Subida máxima en metros por km para que una carrera cuente como marca. Es un juicio y no
+# un estándar, y se puede mover: sin el GAP el ritmo en montaña no es comparable al llano.
+PENDIENTE_MAXIMA_MARCA = 20.0
 
 
 def construir_dataset_mesociclos(df):
@@ -209,73 +225,145 @@ def fuera_de_rango_calibrado(distancia_km):
     return not (RANGO_CALIBRADO[0] <= distancia_km <= RANGO_CALIBRADO[1])
 
 
+def _diferencias_entre_bloques(datos, meses):
+    """Devuelve, por bloque, cuánto más rápido fue que el de una cantidad de mesociclos antes."""
+    serie = datos["mejor_ritmo"]
+    # Se desplaza por número de mesociclo y no por posición, porque el dataset trae huecos
+    # y dos filas vecinas pueden estar separadas por meses sin carreras válidas.
+    previa = pd.Series(serie.to_numpy(), index=serie.index + meses)
+    return (previa - serie).dropna()
+
+
 def progresion_historica(datos, meses):
     """Mide cuánto suele mejorar el atleta en una ventana de una cantidad de meses.
 
     Compara, para cada par de bloques separados por esa cantidad de mesociclos, la
-    diferencia real de marca, y devuelve la mejora típica en ese plazo. Es el dato
-    con el que se contrasta si una meta es ambiciosa: no una opinión, sino lo que el
-    propio historial del atleta ha logrado en plazos comparables.
+    diferencia real de marca, y devuelve la mejora típica en ese plazo junto con su
+    error estándar, que dice cuánto podría moverse esa media solo por azar.
 
     Args:
         datos (pd.DataFrame): Salida de construir_dataset_mesociclos.
         meses (int): Cantidad de mesociclos de separación a comparar (1 mes = 1 bloque).
     Returns:
-        dict | None: Mejora media en min/km y cuántos pares la sostienen, o None si
-            no hay al menos tres pares para no ofrecer una cifra sin respaldo.
+        dict | None: Mejora media y su error estándar en min/km, y cuántos pares la
+            sostienen, o None si no hay al menos tres pares para no ofrecer una cifra
+            sin respaldo.
     """
-    serie = datos["mejor_ritmo"]
-    # Se desplaza por número de mesociclo y no por posición, porque el dataset trae huecos
-    # y dos filas vecinas pueden estar separadas por meses sin carreras válidas.
-    previa = pd.Series(serie.to_numpy(), index=serie.index + meses)
-    diferencias = (previa - serie).dropna()
+    diferencias = _diferencias_entre_bloques(datos, meses)
     if len(diferencias) < 3:
         return None
-    return {"mejora_media_min_km": float(diferencias.mean()), "pares": int(len(diferencias))}
+    return {"mejora_media_min_km": float(diferencias.mean()),
+            "error_estandar_min_km": float(diferencias.std(ddof=1) / np.sqrt(len(diferencias))),
+            "pares": int(len(diferencias))}
 
 
-def verificar_viabilidad(entrenamiento, metricas_actuales, tiempo_objetivo_min, distancia_km):
-    """
-    Contrasta una meta de carrera contra el ritmo estimado y la progresión histórica
-    del atleta. No proyecta un volumen de entrenamiento porque el historial no
-    sostiene esa relación: ver la nota metodológica al inicio del módulo.
+def ruido_entre_bloques(datos, plazos=(1, 2, 3)):
+    """Comprueba si la progresión mes a mes se distingue del ruido entre bloques.
 
     Args:
-        entrenamiento (dict | None): Salida de entrenar_modelo.
-        metricas_actuales (dict | None): Salida de metricas_ultimo_bloque.
-        tiempo_objetivo_min (float): Meta en minutos, para la distancia dada.
-        distancia_km (float): Distancia de la meta.
+        datos (pd.DataFrame): Salida de construir_dataset_mesociclos.
+        plazos (tuple[int]): Mesociclos de separación que se revisan.
     Returns:
-        dict: Diagnóstico con el ritmo objetivo, el margen de error del modelo y
-            cómo se compara la mejora exigida contra la progresión típica del atleta.
+        dict | None: Cambio absoluto medio entre bloques seguidos en min/km y si todas
+            las mejoras típicas quedan por debajo de su error estándar, o None si algún
+            plazo no tiene pares suficientes para medirlo.
     """
-    if entrenamiento is None or metricas_actuales is None:
-        return {"viable": False,
-                "mensaje": "No hay datos recientes suficientes para comparar la meta."}
-
-    ritmo_objetivo_ref = (tiempo_objetivo_min
-                          / ((distancia_km / 10.0) ** EXPONENTE_RIEGEL)) / 10.0
-    ritmo_actual = predecir_ritmo(entrenamiento, metricas_actuales)
-    mae = entrenamiento["mae"]
-
-    mejora_exigida = ritmo_actual - ritmo_objetivo_ref
-    mejora_pct = 100 * mejora_exigida / ritmo_actual if ritmo_actual else 0.0
-
-    resultado = {
-        "viable": True,
-        "ritmo_objetivo": ritmo_objetivo_ref,
-        "ritmo_actual": ritmo_actual,
-        "margen_error": mae,
-        "mejora_exigida_min_km": mejora_exigida,
-        "mejora_exigida_pct": mejora_pct,
-        "referencias": {},
+    seguidos = _diferencias_entre_bloques(datos, 1)
+    progresiones = [progresion_historica(datos, meses) for meses in plazos]
+    if len(seguidos) < 3 or not all(progresiones):
+        return None
+    return {
+        "cambio_medio_min_km": float(seguidos.abs().mean()),
+        "indistinguible": all(abs(p["mejora_media_min_km"]) < p["error_estandar_min_km"]
+                              for p in progresiones),
     }
 
-    # Se contrasta contra 1, 2 y 3 mesociclos porque ahí se concentran las metas a
-    # corto y mediano plazo; a más meses la muestra de pares se vuelve demasiado chica.
-    for meses in (1, 2, 3):
-        progresion = progresion_historica(entrenamiento["datos"], meses)
-        if progresion:
-            resultado["referencias"][meses] = progresion
 
-    return resultado
+def mejores_marcas(df):
+    """Busca la mejor marca real de cada tramo de distancia del selector.
+
+    Se mide con tiempo transcurrido y no de movimiento, porque es el que cuenta como
+    marca en competición, y solo con carreras por debajo de PENDIENTE_MAXIMA_MARCA.
+
+    Args:
+        df (pd.DataFrame): Actividades ya procesadas.
+    Returns:
+        dict: 'tramos' asocia cada distancia del selector con su mejor marca, o con
+            None si el tramo no tiene carreras. 'mas_rapida' es la carrera de ritmo más
+            rápido desde DISTANCIA_MINIMA_MARCA, caiga o no dentro de un tramo. Cada
+            marca trae ritmo en min/km, fecha, distancia real, tiempo total en minutos
+            y cuántas carreras entran en su grupo.
+    """
+    carreras = df[(df["Tipo de actividad"] == "Carrera") & (df["Distancia_km"] > 0)]
+    llanas = carreras[carreras["Desnivel positivo"] / carreras["Distancia_km"]
+                      < PENDIENTE_MAXIMA_MARCA]
+    ritmo_total = llanas["Minutos transcurridos"] / llanas["Distancia_km"]
+
+    def _mejor(filtro):
+        if not filtro.any():
+            return None
+        fila = ritmo_total[filtro].idxmin()
+        return {"ritmo": float(ritmo_total[fila]),
+                "fecha": llanas.at[fila, "Fecha"],
+                "distancia": float(llanas.at[fila, "Distancia_km"]),
+                "tiempo_min": float(llanas.at[fila, "Minutos transcurridos"]),
+                "carreras": int(filtro.sum())}
+
+    tramos = {distancia: _mejor(llanas["Distancia_km"].between(desde, hasta, inclusive="left"))
+              for distancia, (desde, hasta) in TRAMOS_MARCA.items()}
+    return {"tramos": tramos,
+            "mas_rapida": _mejor(llanas["Distancia_km"] >= DISTANCIA_MINIMA_MARCA)}
+
+
+def verificar_viabilidad(marcas, tiempo_objetivo_min, distancia_km):
+    """Contrasta una meta de carrera contra la mejor marca real de su tramo de distancia.
+
+    Si el tramo no tiene marcas, la referencia se proyecta con Riegel desde el tramo con
+    marcas de distancia más parecida, y el resultado lo indica para decirlo en pantalla.
+    No usa la progresión mes a mes porque no se distingue del ruido entre bloques, ver la
+    nota metodológica al inicio del módulo.
+
+    Args:
+        marcas (dict): Salida de mejores_marcas.
+        tiempo_objetivo_min (float): Meta en minutos, para la distancia dada.
+        distancia_km (float): Distancia de la meta, una de las del selector.
+    Returns:
+        dict | None: 'caso' vale 'hecha', 'mejor_marca' o 'por_encima'. Trae además el
+            ritmo de la meta, la referencia usada, la marca desde la que se proyectó o
+            None si la referencia es una marca real, y lo que exige la meta frente a la
+            referencia y frente a la carrera más rápida, todo en min/km. None si no
+            hay ninguna marca con la que comparar.
+    """
+    tramos = marcas["tramos"]
+    con_marca = [distancia for distancia, marca in tramos.items() if marca]
+    if not con_marca or marcas["mas_rapida"] is None:
+        return None
+
+    referencia = tramos.get(distancia_km)
+    origen = None
+    if referencia is None:
+        # La distancia más parecida se busca en proporción y no en km, porque Riegel
+        # escala con el cociente entre las dos distancias.
+        cercana = min(con_marca, key=lambda d: abs(np.log(d / distancia_km)))
+        origen = {**tramos[cercana], "tramo": cercana}
+        tiempo = origen["tiempo_min"] * (distancia_km / origen["distancia"]) ** EXPONENTE_RIEGEL
+        referencia = {"ritmo": tiempo / distancia_km, "tiempo_min": tiempo}
+
+    ritmo_meta = tiempo_objetivo_min / distancia_km
+    mas_rapida = marcas["mas_rapida"]
+    if ritmo_meta >= referencia["ritmo"]:
+        caso = "hecha"
+    elif ritmo_meta >= mas_rapida["ritmo"]:
+        caso = "mejor_marca"
+    else:
+        caso = "por_encima"
+
+    return {
+        "caso": caso,
+        "ritmo_meta": ritmo_meta,
+        "referencia": referencia,
+        "proyectada_desde": origen,
+        "exigido_min_km": referencia["ritmo"] - ritmo_meta,
+        "exceso_min_km": mas_rapida["ritmo"] - ritmo_meta,
+        "mas_rapida": mas_rapida,
+    }
