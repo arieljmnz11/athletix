@@ -711,13 +711,13 @@ with tab_pulso:
                 confirmar = st.checkbox("Confirmo que quiero descartar la serie guardada")
                 if st.button("Borrar serie de esta actividad", width="stretch", disabled=not confirmar):
                     borradas, mensaje = data_loader.borrar_fc_manual(clave)
-                    obtener_datos.clear()
-                    st.session_state.version_datos += 1
                     if borradas:
+                        obtener_datos.clear()
+                        st.session_state.version_datos += 1
                         st.session_state.aviso_pulso = mensaje
                         st.rerun()
+                    # Sin recarga, para que el error siga en pantalla en vez de borrarse al instante.
                     st.error(mensaje)
-                    st.rerun()
 
         with col_vista:
             # Se prioriza lo pegado sobre lo guardado para poder revisar antes de confirmar.
