@@ -79,6 +79,29 @@ DISTANCIA_MINIMA_MARCA = min(desde for desde, _ in TRAMOS_MARCA.values())
 PENDIENTE_MAXIMA_MARCA = 20.0
 
 
+def mejor_ritmo_por_mesociclo(df):
+    """Devuelve el mejor ritmo de cada mesociclo con carreras válidas, tenga o no bloque anterior.
+
+    Cuenta todos los bloques corridos, también el primero tras un parón, que el dataset
+    de entrenamiento descarta por no tener un mes anterior con el que emparejarlo.
+
+    Args:
+        df (pd.DataFrame): Actividades ya procesadas, con la columna 'Mesociclo'.
+    Returns:
+        pd.Series: Mejor ritmo en min/km indexado por número de mesociclo, en orden y
+            sin los bloques que no tienen ninguna carrera válida.
+    """
+    if df.empty or "Mesociclo" not in df.columns:
+        return pd.Series(dtype=float, name="mejor_ritmo")
+
+    carreras = df[
+        (df["Tipo de actividad"] == "Carrera")
+        & (df["Distancia_km"] >= DISTANCIA_MINIMA_ESFUERZO)
+        & (df["Ritmo (min/km)"].between(*RANGO_RITMO_VALIDO))
+    ]
+    return carreras.groupby("Mesociclo")["Ritmo (min/km)"].min().rename("mejor_ritmo")
+
+
 def construir_dataset_mesociclos(df):
     """
     Transforma el historial de actividades en un dataset por mesociclo.
@@ -87,19 +110,11 @@ def construir_dataset_mesociclos(df):
     de al menos 5 km. Actúa como indicador proxy del rendimiento en competencia,
     dado que el historial no contiene carreras oficiales etiquetadas.
     """
-    if df.empty or "Mesociclo" not in df.columns:
+    serie = mejor_ritmo_por_mesociclo(df)
+    if serie.empty:
         return pd.DataFrame()
 
-    carreras = df[
-        (df["Tipo de actividad"] == "Carrera")
-        & (df["Distancia_km"] >= DISTANCIA_MINIMA_ESFUERZO)
-        & (df["Ritmo (min/km)"].between(*RANGO_RITMO_VALIDO))
-    ]
-    if carreras.empty:
-        return pd.DataFrame()
-
-    datos = pd.DataFrame(index=sorted(carreras["Mesociclo"].unique()))
-    datos["mejor_ritmo"] = carreras.groupby("Mesociclo")["Ritmo (min/km)"].min()
+    datos = serie.rename_axis(None).to_frame()
 
     # El ritmo del bloque anterior solo es válido si los bloques son consecutivos:
     # un salto en el índice significa semanas sin carreras válidas de por medio, y

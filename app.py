@@ -587,7 +587,12 @@ with tab_pred:
         st.divider()
         st.subheader("Progresión: mejor ritmo por mesociclo")
 
-        historico = entrenamiento["datos"].reset_index().rename(columns={"index": "Mesociclo"})
+        # Se usan todos los bloques corridos y no solo los del entrenamiento, que descarta el
+        # primer mes tras cada parón. El calendario completo hace que la línea se corte en los
+        # meses sin carreras en vez de unir puntos separados por medio año.
+        corridos = modelo.mejor_ritmo_por_mesociclo(datos_completos)
+        calendario = range(corridos.index.min(), corridos.index.max() + 1)
+        historico = corridos.reindex(calendario).rename_axis("Mesociclo").reset_index()
 
         # El número de bloque no es interpretable por sí solo: se traduce a la fecha real
         # de inicio del mesociclo, contada desde la primera actividad del histórico.
@@ -596,7 +601,10 @@ with tab_pred:
 
         # El mejor ritmo de cada bloque oscila mucho porque depende de si ese mes hubo un
         # esfuerzo a tope. La media de tres bloques suaviza el zigzag y deja ver la tendencia.
+        # Sobre el calendario completo la ventana abarca tres números de mesociclo seguidos, y
+        # se borra donde no hay punto para que la tendencia no rellene un mes sin carreras.
         historico["Tendencia"] = historico["mejor_ritmo"].rolling(3, center=True, min_periods=2).mean()
+        historico.loc[historico["mejor_ritmo"].isna(), "Tendencia"] = np.nan
         historico["Ritmo texto"] = historico["mejor_ritmo"].apply(backend.formatear_ritmo)
         historico["Tendencia texto"] = historico["Tendencia"].apply(backend.formatear_ritmo)
 
