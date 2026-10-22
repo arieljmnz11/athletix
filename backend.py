@@ -472,13 +472,19 @@ def ultimas_actividades(df, n=10, limites_zonas=None, tiempo_legible=True):
                 "Tiempo total", "Desnivel positivo", "Ritmo cardiaco promedio",
                 "Zona media", "Ritmo (min/km)", "Velocidad (km/h)", "Carga"]
 
-    tabla = tabla[columnas].round(1)
+    tabla = tabla[columnas].copy()
+    # El ritmo se formatea desde su valor exacto. Redondearlo antes a un decimal lo movía de
+    # seis en seis segundos, porque una décima de minuto son seis segundos.
     tabla["Ritmo (min/km)"] = tabla["Ritmo (min/km)"].apply(formatear_ritmo)
 
     if tiempo_legible:
         # Se reconstruyen los segundos antes de formatear: aplicar el formateador
         # directo sobre 'Minutos' lo dividiría entre sesenta una segunda vez.
         tabla["Minutos"] = (tabla["Minutos"] * 60).apply(formatear_duracion_corta)
+
+    # El redondeo va al final y solo alcanza a las columnas que siguen siendo números,
+    # porque las que ya se pasaron a texto se formatearon desde su valor exacto.
+    tabla = tabla.round(1)
 
     nombre_movimiento = "Tiempo en movimiento" if tiempo_legible else "Duración Minutos"
     return tabla.rename(columns={"Distancia_km": "Km", "Minutos": nombre_movimiento,
