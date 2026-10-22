@@ -188,7 +188,8 @@ calcula siempre con todos los deportes juntos, ya que el organismo acumula una s
 fatiga y separar la carga por disciplina produciría diagnósticos contradictorios.
 
 **Predicción de rendimiento.** Regresión simple entrenada sobre bloques de 28 días, donde
-el mejor ritmo del bloque anterior predice el del bloque actual. Se usan mesociclos y no
+el mejor ritmo del bloque anterior predice el del bloque actual. En pantalla se aplica al
+mejor ritmo de los últimos 28 días para estimar los 28 siguientes. Se usan mesociclos y no
 semanas porque el descanso previo a una competición sesgaría el modelo hacia tiempos más
 lentos. La validación es Leave One Out contra dos referencias ingenuas, repetir el ritmo
 medio histórico y repetir la marca del bloque anterior sin ajuste, porque un modelo que no

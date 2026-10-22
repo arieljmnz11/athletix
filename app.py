@@ -368,8 +368,8 @@ def segundos_minimos(min_km):
 
 with tab_pred:
     st.subheader("Predicción de rendimiento por mesociclo")
-    st.caption("Regresión simple validada con Leave-One-Out donde el mejor ritmo del mesociclo "
-               "anterior predice el de este bloque, con un ajuste que acerca los meses "
+    st.caption("Regresión simple validada con Leave-One-Out donde el mejor ritmo de tus últimos "
+               "28 días predice el de los 28 que vienen, con un ajuste que acerca los meses "
                "excepcionales a tu nivel habitual. Se usan mesociclos y no semanas porque el "
                "descanso previo a competición, el tapering, sesgaría el modelo hacia tiempos más lentos.")
 
@@ -406,8 +406,8 @@ with tab_pred:
         metricas = modelo.metricas_ultimo_bloque(datos_completos)
 
         if metricas is None:
-            st.info("Para predecir hace falta al menos una carrera de 5 km o más tanto en los "
-                    "últimos 28 días como en los 28 anteriores a esos. Sal a correr y vuelve a consultar.")
+            st.info("Para predecir hace falta al menos una carrera de 5 km o más en los "
+                    "últimos 28 días. Sal a correr y vuelve a consultar.")
             prediccion = None
         else:
             col_dist, col_res = st.columns([1, 2])
@@ -930,6 +930,7 @@ with tab_agente:
                     ritmo_ctx = modelo.predecir_ritmo(entrenamiento_ctx, metricas_ctx)
                     prediccion_ctx = {
                         "ritmo": ritmo_ctx,
+                        "ritmo_texto": backend.formatear_ritmo(ritmo_ctx),
                         "distancia": 10.0,
                         "tiempo_texto": modelo.formatear_tiempo(modelo.ritmo_a_tiempo(ritmo_ctx, 10.0)),
                     }

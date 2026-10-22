@@ -178,17 +178,18 @@ def predecir_ritmo(entrenamiento, metricas_bloque):
 
 def metricas_ultimo_bloque(df, hoy=None, dias=28):
     """
-    Extrae las métricas del mesociclo vigente para alimentar el modelo. El ritmo
-    del bloque anterior se toma de los 28 días previos a la ventana vigente, no
-    del dataset de entrenamiento, para reflejar la forma más reciente del atleta.
+    Extrae las métricas de los últimos 28 días para predecir los 28 que vienen. El
+    modelo aprendió que el mejor ritmo de un bloque anticipa el del siguiente, así que
+    el mejor ritmo de esta ventana entra como el del bloque anterior al que se predice.
 
-    Devuelve None si el bloque vigente o el anterior no contienen carreras válidas.
+    Devuelve None si la ventana no contiene ninguna carrera válida.
     """
     # La fecha se ancla a la zona horaria del atleta: el servidor corre en UTC y
     # de noche desplazaría un día la ventana de 28 días.
     hoy = pd.Timestamp(hoy).normalize() if hoy is not None else pd.Timestamp(config.hoy())
-    inicio_vigente = hoy - pd.Timedelta(days=dias)
-    inicio_previo = inicio_vigente - pd.Timedelta(days=dias)
+    # Hoy cuenta como uno de los días de la ventana, igual que en los km del Panel.
+    inicio_ventana = hoy - pd.Timedelta(days=dias - 1)
+    fin_ventana = hoy + pd.Timedelta(days=1)
 
     def _mejor_ritmo(desde, hasta):
         bloque = df[(df["Fecha"] >= desde) & (df["Fecha"] < hasta)]
@@ -199,7 +200,7 @@ def metricas_ultimo_bloque(df, hoy=None, dias=28):
         ]
         return carreras["Ritmo (min/km)"].min() if not carreras.empty else None
 
-    mejor_ritmo_previo = _mejor_ritmo(inicio_previo, inicio_vigente)
+    mejor_ritmo_previo = _mejor_ritmo(inicio_ventana, fin_ventana)
     if mejor_ritmo_previo is None:
         return None
 

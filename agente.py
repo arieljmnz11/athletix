@@ -209,14 +209,17 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario,
     lineas.append("")
     lineas.append("COMPONENTE PREDICTIVO (regresión por mesociclos)")
     if prediccion and entrenamiento:
-        lineas.append(f"- Ritmo de competición estimado: {prediccion['ritmo']:.2f} min/km.")
-        lineas.append(f"- Tiempo proyectado en {prediccion['distancia']:.1f} km: {prediccion['tiempo_texto']}.")
+        # El ritmo llega ya en minutos y segundos, igual que en la lista de actividades. En
+        # minutos decimales el modelo podía leer 5.73 min/km como 5 minutos 73 segundos.
+        lineas.append(f"- Ritmo de competición estimado para los próximos 28 días: "
+                      f"{prediccion['ritmo_texto']} min/km.")
+        lineas.append(f"- Tiempo proyectado en {prediccion['distancia']:g} km: {prediccion['tiempo_texto']}.")
         lineas.append(f"- Fiabilidad del modelo: R²={entrenamiento['r2']:.2f}, "
-                      f"error medio {entrenamiento['mae']:.2f} min/km "
+                      f"error medio {entrenamiento['mae'] * 60:.0f} s/km "
                       f"(entrenado con {entrenamiento['n_mesociclos']} mesociclos).")
         lineas.append("- Limitación: el objetivo es el mejor esfuerzo del bloque, no un tiempo oficial de competencia.")
     else:
-        lineas.append("- Sin predicción disponible: no hay carreras recientes suficientes en el bloque actual.")
+        lineas.append("- Sin predicción disponible: no hay ninguna carrera de 5 km o más en los últimos 28 días.")
 
     if diario:
         lineas.append("")

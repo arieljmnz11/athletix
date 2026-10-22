@@ -325,8 +325,9 @@ def seccion_produccion(df):
     metricas = modelo.metricas_ultimo_bloque(df)
     if metricas is not None:
         ritmo = modelo.predecir_ritmo(entrenamiento, metricas)
-        print(f"  Mejor ritmo del bloque anterior : {metricas['mejor_ritmo_previo']:.2f} min/km")
-        print(f"  Ritmo predicho para este bloque : {ritmo:.2f} min/km\n")
+        print(f"  Mejor ritmo de los últimos 28 días    : "
+              f"{backend.formatear_ritmo(metricas['mejor_ritmo_previo'])} min/km")
+        print(f"  Ritmo predicho para los 28 que vienen : {backend.formatear_ritmo(ritmo)} min/km\n")
 
     parrafo("El verificador de viabilidad compara la meta contra tus mejores marcas reales y no "
             "contra la progresión mes a mes. Esta tabla explica por qué. Mide, para cada par de "
