@@ -945,9 +945,15 @@ with tab_agente:
                     st.session_state.get("huella_actividades", {}), huella)
                 st.session_state.huella_actividades = huella
 
+                # El volumen sigue el mismo criterio que el ACWR, todos los deportes juntos,
+                # porque el cuerpo acumula una sola fatiga. El filtro de la barra lateral solo
+                # cambia lo que se ve en el Panel, no lo que sabe el agente.
+                kpis_cuerpo = backend.calcular_kpis(datos_completos)
+                volumen = {dias: backend.volumen_por_deporte(datos_completos, dias) for dias in (7, 28)}
+
                 contexto = agente.construir_contexto(
-                    kpis_hoy, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
-                    actividades_recientes=recientes, cambios=cambios,
+                    kpis_cuerpo, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
+                    actividades_recientes=recientes, cambios=cambios, volumen=volumen,
                 )
 
                 st.session_state.ultimo_contexto = contexto

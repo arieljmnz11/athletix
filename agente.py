@@ -90,15 +90,37 @@ def registrar_estado(estado, nota="", retencion=None):
         pass
     return cargar_diario()
 
+def _lineas_volumen(dias, volumen):
+    """Escribe el volumen de una ventana con el total en horas y los km por deporte.
+
+    Args:
+        dias (int): Tamaño de la ventana, para la etiqueta.
+        volumen (dict): Salida de backend.volumen_por_deporte.
+    Returns:
+        list[str]: Líneas listas para el contexto.
+    """
+    sesiones = volumen["sesiones"]
+    if not sesiones:
+        return [f"- Volumen últimos {dias} días: sin actividades registradas."]
+    reparto = ", ".join(
+        f"{d['tipo']} {d['km']:.1f} km en {d['horas']:.1f} h" if d["km"] is not None
+        else f"{d['tipo']} {d['horas']:.1f} h"
+        for d in volumen["deportes"])
+    return [f"- Volumen últimos {dias} días, todos los deportes juntos: {volumen['horas']:.1f} h "
+            f"en {sesiones} {'sesión' if sesiones == 1 else 'sesiones'}.",
+            f"  {reparto}."]
+
 # Función que construye el contexto del sistema para el agente, combinando indicadores, predicciones y diario de estado físico.
 
 def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario,
-                       actividades_recientes=None, cambios=None):
+                       actividades_recientes=None, cambios=None, volumen=None):
     """
     Ensambla el prompt de sistema con la salida real de los módulos analíticos.
     El agente recibe los indicadores, el resultado del componente predictivo, su
     fiabilidad declarada y el detalle de las últimas actividades individuales, de
     modo que pueda responder sobre una sesión concreta y no solo sobre agregados.
+    El volumen llega por ventana de días, con el total en horas y los km separados
+    por deporte, en un diccionario como {7: ..., 28: ...}.
     """
     ahora = datetime.now(config.ZONA_HORARIA)
     # Cada día lleva su etiqueta relativa escrita: con una lista sin etiquetar el modelo
@@ -132,12 +154,9 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario,
     dias = diagnostico.get("dias_inactivo")
     if dias is not None:
         lineas.append(f"- Días desde la última actividad registrada: {dias}.")
-    lineas += [
-        f"- Volumen últimos 7 días: {kpis.get('km_7d', 0):.1f} km.",
-        f"- Volumen últimos 28 días: {kpis.get('km_28d', 0):.1f} km.",
-        f"- Horas entrenadas en 28 días: {kpis.get('horas_28d', 0):.1f} h.",
-        f"- Cobertura de pulsómetro en el histórico: {kpis.get('cobertura_fc', 0):.0f} %.",
-    ]
+    for dias in sorted(volumen or {}):
+        lineas += _lineas_volumen(dias, volumen[dias])
+    lineas.append(f"- Cobertura de pulsómetro en el histórico: {kpis.get('cobertura_fc', 0):.0f} %.")
     if actividades_recientes is not None and not actividades_recientes.empty:
         lineas.append("")
         lineas.append(f"ÚLTIMAS {len(actividades_recientes)} ACTIVIDADES (no recibes nada anterior)")
@@ -237,6 +256,10 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario,
         "12. Este contexto se reconstruye en cada mensaje. Si lo que ves aquí contradice "
         "algo que dijiste antes, manda este contexto. Nunca digas que no tienes acceso a "
         "datos actualizados: es falso.",
+        "13. Los kilómetros de deportes distintos no se suman entre sí, porque un kilómetro "
+        "en bicicleta, caminando o remando no carga lo mismo que uno corriendo. Para "
+        "comparar el volumen entre deportes usa las horas, que ya vienen sumadas, y no "
+        "calcules un total de kilómetros por tu cuenta.",
     ]
 
     # Va al final a propósito: es lo último que lee el modelo antes de responder y lo

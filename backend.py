@@ -350,6 +350,43 @@ def antiguedad_en_texto(fecha, hoy=None):
     texto = f"hace {_cantidad(años, 'año', 'años')}"
     return texto + (f" y {_cantidad(meses, 'mes', 'meses')}" if meses else "")
 
+def _ultimos_dias(df, dias, hoy):
+    """Filtra las actividades de hoy y de los días anteriores hasta completar la ventana."""
+    # Hoy cuenta como uno de los días de la ventana, igual que en la media móvil del ACWR,
+    # así que se resta un día menos. El tope de arriba hace falta cuando hoy es una fecha pasada.
+    desde = hoy - pd.Timedelta(days=dias - 1)
+    return df[(df["Fecha"] >= desde) & (df["Fecha"] < hoy + pd.Timedelta(days=1))]
+
+def volumen_por_deporte(df, dias, hoy=None):
+    """Reparte el volumen de una ventana de días entre los deportes practicados.
+
+    Los kilómetros se dan por deporte y nunca sumados, porque un kilómetro en bicicleta no
+    carga lo mismo que uno corriendo. Las horas sí se suman y son la medida común.
+
+    Args:
+        df (pd.DataFrame): Actividades ya procesadas, de todos los deportes.
+        dias (int): Tamaño de la ventana, contando hoy.
+        hoy: Fecha de referencia. Si es None se toma el día local del atleta.
+    Returns:
+        dict: 'horas' y 'sesiones' de toda la ventana, y 'deportes', una lista con tipo,
+            km, horas y sesiones de cada deporte, de más a menos horas. Los km son None
+            en los deportes sin distancia y en los que no registraron ninguna.
+    """
+    ventana = _ultimos_dias(df, dias, _fecha_referencia(hoy))
+    deportes = []
+    for tipo, grupo in ventana.groupby("Tipo de actividad"):
+        km = float(grupo["Distancia_km"].sum())
+        deportes.append({
+            "tipo": tipo,
+            "km": None if tipo in SIN_DISTANCIA or km == 0 else km,
+            "horas": float(grupo["Minutos"].sum() / 60),
+            "sesiones": int(len(grupo)),
+        })
+    deportes.sort(key=lambda deporte: deporte["horas"], reverse=True)
+    return {"horas": float(ventana["Minutos"].sum() / 60),
+            "sesiones": int(len(ventana)),
+            "deportes": deportes}
+
 def calcular_kpis(df, hoy=None):
     """Calcula los indicadores numéricos del panel principal."""
     hoy = _fecha_referencia(hoy)                                                   # Día local del atleta como referencia
@@ -358,10 +395,8 @@ def calcular_kpis(df, hoy=None):
     if df.empty:                                                                   # Protege contra filtros sin resultados
         return kpis                                                                # Devuelve solo el conteo
 
-    # Hoy cuenta como uno de los días de la ventana, igual que en la media móvil del ACWR,
-    # así que se restan seis y veintisiete días. Con siete y veintiocho entraba un día de más.
-    ultimos_7 = df[df["Fecha"] >= hoy - pd.Timedelta(days=6)]                      # Hoy y los 6 días anteriores
-    ultimos_28 = df[df["Fecha"] >= hoy - pd.Timedelta(days=27)]                    # Hoy y los 27 días anteriores
+    ultimos_7 = _ultimos_dias(df, 7, hoy)                                          # Hoy y los 6 días anteriores
+    ultimos_28 = _ultimos_dias(df, 28, hoy)                                        # Hoy y los 27 días anteriores
 
     kpis["km_7d"] = ultimos_7["Distancia_km"].sum()                                # Volumen de la última semana
     kpis["km_28d"] = ultimos_28["Distancia_km"].sum()                              # Volumen del último mesociclo
