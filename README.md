@@ -5,10 +5,8 @@ deportivo de Strava. Calcula indicadores de fatiga, estima el rendimiento en com
 mediante un modelo de regresión y expone un agente conversacional que interpreta esos
 resultados sobre datos reales.
 
-El proyecto nació como trabajo de la asignatura Fundamentos de Ciencia de Datos e
-Inteligencia Artificial de la carrera de Ciencia de Datos e IA de la UNACH, y después se
-extendió con persistencia en la nube, carga manual de frecuencia cardíaca, métricas
-derivadas de series de pulso y ajustes personales.
+Es un proyecto personal. Con el tiempo se extendió con persistencia en la nube, carga
+manual de frecuencia cardíaca, métricas derivadas de series de pulso y ajustes personales.
 
 ## Qué problema resuelve
 
