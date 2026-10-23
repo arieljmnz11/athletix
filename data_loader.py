@@ -323,19 +323,21 @@ def leer_ajustes():
     return respuesta.data[0] if respuesta.data else None
 
 def guardar_ajustes(valores):
-    """Actualiza la fila única de ajustes.
+    """Guarda la fila única de ajustes, creándola si todavía no existe.
 
     Args:
         valores (dict): Campos a modificar, con los nombres de columna de la tabla.
     Returns:
         bool: True si la escritura llegó a la base de datos.
     """
-    datos = dict(valores)
+    # El id va dentro de los datos para que el upsert cree la fila en una instalación
+    # nueva. Con update, si la fila no existía no se guardaba nada y aun así se avisaba de éxito.
+    datos = {**valores, "id": 1}
     # La marca de tiempo se escribe desde Python porque el valor por defecto de la
     # columna solo se aplica al insertar, nunca al modificar una fila que ya existe.
     datos["actualizado_en"] = dt.datetime.now(config.ZONA_HORARIA).isoformat()
     try:
-        _cliente_supabase().table(TABLA_AJUSTES).update(datos).eq("id", 1).execute()
+        _cliente_supabase().table(TABLA_AJUSTES).upsert(datos, on_conflict="id").execute()
         return True
     except Exception:
         return False

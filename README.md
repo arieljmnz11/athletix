@@ -168,8 +168,9 @@ integridad referencial a cambio de cobertura, y el precio es que una clave mal e
 produce muestras huérfanas en vez de un error.
 
 La tabla `ajustes` tiene una sola fila, forzada por `check (id = 1)`, porque solo hay un
-atleta. La aplicación la modifica con `update` y nunca la inserta, así que la fila tiene
-que existir desde el principio, y de eso se encarga el `insert` del final del bloque.
+atleta. La aplicación la guarda con `upsert` sobre `id`, así que si la fila todavía no
+existe la crea al guardar los ajustes por primera vez. El `insert` del final del bloque no
+es imprescindible, pero deja los valores por defecto disponibles desde el principio.
 
 ## Indicadores implementados
 
@@ -231,11 +232,13 @@ interfaz advierte que el esfuerzo no fue continuo y que el valor no es interpret
 
 El agente usa la API de Anthropic con el modelo `claude-sonnet-5`. No opera como un
 chatbot aislado, recibe un contexto construido con la salida real de los módulos
-analíticos, que incluye el ACWR y su interpretación, los volúmenes de 7 y 28 días, las
-horas de los últimos 28 días, la cobertura de pulsómetro, el detalle de las últimas
-actividades con desnivel, tiempo total, pulso y zona media, la predicción del modelo con
-su fiabilidad declarada y el diario de estado físico. Cuántas actividades recibe se fija
-en Ajustes, veinte por defecto.
+analíticos, que incluye el ACWR y su interpretación, el volumen de 7 y 28 días de todos
+los deportes juntos, en horas y con los kilómetros separados por deporte, la cobertura de
+pulsómetro, el detalle de las últimas actividades con desnivel, tiempo total, pulso y zona
+media, la proyección del modelo para los próximos 28 días con su margen como rango de
+ritmos y el diario de estado físico. Cuántas actividades recibe se fija en Ajustes, veinte
+por defecto. No recibe las métricas internas del modelo, porque solo lo llevaban a
+explicar estadística en vez de entrenamiento.
 
 Entre un mensaje y el siguiente el sistema compara el pulso de esas actividades. Si cambió,
 por ejemplo porque se cargó una serie a mano, se lo avisa al agente de forma explícita,
