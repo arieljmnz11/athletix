@@ -112,12 +112,12 @@ def _lineas_volumen(dias, volumen):
 
 # Función que construye el contexto del sistema para el agente, combinando indicadores, predicciones y diario de estado físico.
 
-def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario,
+def construir_contexto(kpis, diagnostico, prediccion, diario,
                        actividades_recientes=None, cambios=None, volumen=None):
     """
     Ensambla el prompt de sistema con la salida real de los módulos analíticos.
-    El agente recibe los indicadores, el resultado del componente predictivo, su
-    fiabilidad declarada y el detalle de las últimas actividades individuales, de
+    El agente recibe los indicadores, la proyección del modelo con su margen ya
+    convertido en un rango de ritmos y el detalle de las últimas actividades, de
     modo que pueda responder sobre una sesión concreta y no solo sobre agregados.
     El volumen llega por ventana de días, con el total en horas y los km separados
     por deporte, en un diccionario como {7: ..., 28: ...}.
@@ -207,17 +207,20 @@ def construir_contexto(kpis, diagnostico, prediccion, entrenamiento, diario,
                       "considerando el desnivel y el tiempo total, no solo el ritmo.")
 
     lineas.append("")
-    lineas.append("COMPONENTE PREDICTIVO (regresión por mesociclos)")
-    if prediccion and entrenamiento:
+    lineas.append("PREDICCIÓN DE RENDIMIENTO")
+    if prediccion:
         # El ritmo llega ya en minutos y segundos, igual que en la lista de actividades. En
         # minutos decimales el modelo podía leer 5.73 min/km como 5 minutos 73 segundos.
         lineas.append(f"- Ritmo de competición estimado para los próximos 28 días: "
                       f"{prediccion['ritmo_texto']} min/km.")
         lineas.append(f"- Tiempo proyectado en {prediccion['distancia']:g} km: {prediccion['tiempo_texto']}.")
-        lineas.append(f"- Fiabilidad del modelo: R²={entrenamiento['r2']:.2f}, "
-                      f"error medio {entrenamiento['mae'] * 60:.0f} s/km "
-                      f"(entrenado con {entrenamiento['n_mesociclos']} mesociclos).")
-        lineas.append("- Limitación: el objetivo es el mejor esfuerzo del bloque, no un tiempo oficial de competencia.")
+        # El margen va como rango de ritmos y no como métricas del modelo, para que no
+        # presente la proyección como exacta ni se ponga a explicar estadística.
+        desde, hasta = prediccion["rango_texto"]
+        lineas.append(f"- Esta proyección tiene un margen de unos {prediccion['margen_s']} segundos "
+                      f"por kilómetro, o sea entre {desde} y {hasta} min/km.")
+        lineas.append("- Limitación: es una proyección para los próximos 28 días, no un tiempo "
+                      "oficial de competencia.")
     else:
         lineas.append("- Sin predicción disponible: no hay ninguna carrera de 5 km o más en los últimos 28 días.")
 

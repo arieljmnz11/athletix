@@ -928,11 +928,17 @@ with tab_agente:
 
                 if entrenamiento_ctx and metricas_ctx:
                     ritmo_ctx = modelo.predecir_ritmo(entrenamiento_ctx, metricas_ctx)
+                    # En 10 km el ritmo de referencia no se escala con Riegel, así que el margen
+                    # es el error medio tal cual, el mismo rango que muestra la pestaña Predicción.
+                    margen_ctx = entrenamiento_ctx["mae"]
                     prediccion_ctx = {
                         "ritmo": ritmo_ctx,
                         "ritmo_texto": backend.formatear_ritmo(ritmo_ctx),
                         "distancia": 10.0,
                         "tiempo_texto": modelo.formatear_tiempo(modelo.ritmo_a_tiempo(ritmo_ctx, 10.0)),
+                        "margen_s": round(margen_ctx * 60),
+                        "rango_texto": (backend.formatear_ritmo(ritmo_ctx - margen_ctx),
+                                        backend.formatear_ritmo(ritmo_ctx + margen_ctx)),
                     }
 
                 recientes = backend.ultimas_actividades(
@@ -953,7 +959,7 @@ with tab_agente:
                 volumen = {dias: backend.volumen_por_deporte(datos_completos, dias) for dias in (7, 28)}
 
                 contexto = agente.construir_contexto(
-                    kpis_cuerpo, diagnostico, prediccion_ctx, entrenamiento_ctx, agente.cargar_diario(),
+                    kpis_cuerpo, diagnostico, prediccion_ctx, agente.cargar_diario(),
                     actividades_recientes=recientes, cambios=cambios, volumen=volumen,
                 )
 
