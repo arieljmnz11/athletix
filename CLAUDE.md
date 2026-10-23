@@ -65,7 +65,7 @@ en cualquiera de los dos crearía un import circular.
 PostgreSQL en Supabase. El disco de Streamlit Community Cloud es efímero, nada se guarda
 en archivos. Cinco tablas:
 
-- `actividades_sincronizadas`, espejo de Strava, unas 1377 filas desde el 09/10/2020.
+- `actividades_sincronizadas`, espejo de Strava con el histórico completo desde el 09/10/2020.
   Clave única `fecha_actividad`, de tipo texto. Incluye `fc_maxima` y `strava_id`.
 - `fc_manual`, una fila por muestra de pulso, única por `fecha_actividad` y `tiempo_s`.
   Siempre se lee ordenada por tiempo dentro de cada actividad, nunca por id de inserción.
@@ -92,16 +92,25 @@ dame el SQL y lo corro, no intentes aplicarlo desde aquí.
   es irregular.
 - La fecha se ancla a `America/Guayaquil` porque el servidor de Streamlit corre en UTC.
   Usa `config.hoy()`, nunca la fecha del sistema.
-- Mi FC máxima medida es 199 ppm y mi FC en reposo ronda los 50. El modelo de zonas activo
-  es porcentaje de FC máxima. Karvonen está configurado pero sin activar.
+- Mi FC máxima medida es 199 ppm y mi FC en reposo es 50. El modelo de zonas activo es
+  Karvonen desde el 08/10/2026, elegido tras comparar mis zonas con las de Strava y con mis
+  sensaciones.
 - Zona horaria y peso corporal quedan fuera de Ajustes a propósito.
 - Los umbrales del ACWR, 0.8, 1.3 y 1.5, quedan fijos porque vienen de literatura.
 - El modelo de predicción se redujo a una sola variable, el mejor ritmo del mesociclo
   anterior, tras comparar seis variantes con validación Leave-One-Out contra dos
-  referencias ingenuas. El planificador que despejaba volumen semanal se convirtió en un
-  verificador de viabilidad porque el historial no tiene variación suficiente de volumen
-  entre bloques. Un factor de desnivel para incluir la montaña se descartó por
+  referencias ingenuas. En pantalla toma el mejor ritmo de los últimos 28 días para
+  estimar los 28 que vienen. Un factor de desnivel para incluir la montaña se descartó por
   inconsistente entre cuatro métodos. Todo esto se recalcula con `comparar_modelos.py`.
+- El verificador de viabilidad compara la meta contra mis mejores marcas reales por tramo
+  de distancia, en llano y con tiempo total. Si un tramo no tiene marcas, proyecta con
+  Riegel desde el tramo más parecido. El umbral de montaña, 20 m de subida por km, es un
+  juicio y vive en una constante de `modelo.py`.
+- La progresión mes a mes no se puede medir con este historial. El ruido entre un bloque
+  y el siguiente es mucho mayor que cualquier mejora típica, que queda por debajo de su
+  propio error, así que no hay que volver a proponer un verificador basado en ella. El
+  planificador que despejaba volumen semanal tampoco vuelve, porque el historial no tiene
+  variación suficiente de volumen entre bloques.
 
 ## Al tocar el código
 
@@ -123,6 +132,11 @@ El trabajo grande está repartido en etapas, una por vez:
 2. **Series de Strava.** Traer las series de pulso, pendiente y altitud bajo demanda desde
    la API, sin guardarlas. De ahí sale el Grade Adjusted Pace real, que es lo que falta
    para que el modelo entienda la montaña, más la estimación de potencia en ciclismo.
+   Traer también los mejores esfuerzos de la API, el 1 km, el 5 km y el 10 km más rápidos
+   dentro de cada salida. Hoy el modelo y las marcas solo ven el ritmo medio de la
+   actividad entera y se quedan cortos: en octubre de 2026 Athletix predecía 6:03 en 10 km,
+   Strava 4:57, y mi mejor marca real era 5:29. Hasta tener el GAP, el verificador no
+   sirve para metas de trail, porque compararía una meta de montaña contra marcas en llano.
 3. **Planificador con calendario.** La IA propone una semana, el código la valida contra
    el ACWR y la regla del 10 % antes de mostrarla.
 4. **Limpieza.** Modularizar `app.py` en una carpeta `vistas/` con un archivo por pestaña,

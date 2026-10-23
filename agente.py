@@ -266,6 +266,11 @@ def construir_contexto(kpis, diagnostico, prediccion, diario,
         "en bicicleta, caminando o remando no carga lo mismo que uno corriendo. Para "
         "comparar el volumen entre deportes usa las horas, que ya vienen sumadas, y no "
         "calcules un total de kilómetros por tu cuenta.",
+        # El ejemplo va con letras y no con cifras para que el modelo no lo confunda con un
+        # dato real cuando la predicción del día sea otra.
+        "14. No uses paréntesis en tus respuestas. Escribe los datos dentro de la frase, por "
+        "ejemplo 'T, a unos R min/km, con un margen de M s/km, o sea entre A y B' en vez de "
+        "'T (ritmo R min/km, ±M s/km)'.",
     ]
 
     # Va al final a propósito: es lo último que lee el modelo antes de responder y lo
