@@ -187,6 +187,7 @@ def cargar_y_procesar_datos():
     df["Ritmo cardiaco promedio"] = pd.to_numeric(crudo["Ritmo cardiaco promedio"], errors="coerce")  # FC media real
     df["Desnivel positivo"] = pd.to_numeric(crudo["Desnivel positivo"], errors="coerce").fillna(0)  # Desnivel acumulado
     df["Origen"] = crudo["Origen"] if "Origen" in crudo.columns else "csv"
+    df["Id de Strava"] = pd.to_numeric(crudo["Id de Strava"], errors="coerce")    # Clave única de las filas de la API
 
     df = df.dropna(subset=["Fecha", "Tiempo en movimiento"])                       # Descarta registros sin fecha ni duración
     df = df[df["Tiempo en movimiento"] > 0]                                        # Elimina actividades de duración nula
@@ -198,9 +199,11 @@ def cargar_y_procesar_datos():
         inicio_api = df.loc[df["Origen"] == "api", "Fecha"].min()
         df = df[(df["Origen"] == "api") | (df["Fecha"] < inicio_api)]
         
-    # Ante una actividad presente en ambas fuentes se conserva la de la API, que se
-    # concatena después y es la que lleva enlazada la frecuencia cardíaca manual.
-    df = df.drop_duplicates(subset=["Fecha"], keep="last")
+    # Las filas de la API se deduplican por id y no por fecha, porque dos actividades
+    # distintas pueden empezar en el mismo instante. El CSV no trae id y sigue por fecha.
+    es_api = df["Origen"] == "api"
+    df = pd.concat([df[~es_api].drop_duplicates(subset=["Fecha"], keep="last"),
+                    df[es_api].drop_duplicates(subset=["Id de Strava"], keep="last")])
     df = df.sort_values("Fecha").reset_index(drop=True)                            # Ordena cronológicamente
 
     # Las actividades anteriores a la incorporación del campo no traen tiempo

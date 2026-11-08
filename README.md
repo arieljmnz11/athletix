@@ -71,12 +71,14 @@ importarse desde las dos sin ciclo.
 El sistema combina tres orígenes.
 
 **Sincronización con la API de Strava.** Se autentica por OAuth 2.0 con un refresh token
-y descarga las actividades posteriores a la última registrada mediante el parámetro
-`after`. La paginación es de 200 elementos por página. La descarga se aplica sobre
-Supabase con `upsert` sobre la columna `fecha_actividad`, que es única, de modo que el
-solape de tres días que se aplica por seguridad no genera duplicados. La tabla cubre el
-histórico completo desde octubre de 2020, y cada fila guarda también el identificador de
-Strava en `strava_id`.
+y en cada pasada pide la lista completa de resúmenes de actividades, de 200 en 200, sin
+pedir el detalle de ninguna. La compara con la tabla y escribe solo lo que cambió. Las
+actividades nuevas o editadas en Strava entran con `upsert` sobre `strava_id`, que es la
+clave única, y las que ya no existen en Strava se borran después. El orden protege la
+resubida de un mismo archivo, que entra con un id nuevo antes de borrar el viejo. El
+borrado solo ocurre si la descarga llegó hasta la última página y si lo que sobra no pasa
+del 5 % de la tabla, para que un fallo de Strava nunca pueda vaciarla. La tabla cubre el
+histórico completo desde octubre de 2020.
 
 **Export histórico de Strava.** Archivo `actividades_strava.csv` con el volcado completo
 de la cuenta. Contiene datos deportivos personales reales. Desde que la sincronización
@@ -97,7 +99,7 @@ Community Cloud es efímero, así que ningún estado se guarda en disco.
 ```sql
 create table actividades_sincronizadas (
   id bigint generated always as identity primary key,
-  fecha_actividad text not null unique,
+  fecha_actividad text not null,
   tipo_actividad text,
   distancia_m double precision,
   tiempo_movimiento_s double precision,
@@ -106,7 +108,7 @@ create table actividades_sincronizadas (
   fc_promedio double precision,
   velocidad_promedio double precision,
   fc_maxima double precision,
-  strava_id bigint
+  strava_id bigint not null unique
 );
 
 create table fc_manual (
@@ -163,7 +165,13 @@ La misma tabla no declara llave foránea hacia las actividades. Los registros es
 repartidos entre el CSV del repositorio y Supabase, de modo que una restricción de
 integridad rechazaría cualquier serie asociada a una actividad histórica. Se sacrifica
 integridad referencial a cambio de cobertura, y el precio es que una clave mal escrita
-produce muestras huérfanas en vez de un error.
+produce muestras huérfanas en vez de un error. La ausencia de llave foránea es además lo
+que garantiza que borrar una actividad en Strava nunca borre su pulso manual, que es la
+única copia que existe.
+
+El pulso manual se enlaza por la hora de inicio y no por `strava_id` a propósito. Al
+borrar y volver a subir el mismo archivo, Strava le asigna un id nuevo pero conserva la
+hora de inicio, así que la serie sigue enlazada sin hacer nada.
 
 La tabla `ajustes` tiene una sola fila, forzada por `check (id = 1)`, porque solo hay un
 atleta. La aplicación la guarda con `upsert` sobre `id`, así que si la fila todavía no
@@ -320,12 +328,11 @@ la API las entrega en hora local, de modo que una misma actividad no coincide en
 y se contabilizaba dos veces. La sincronización cubre ya todo el historial, así que la API
 se toma como fuente autoritativa y el CSV solo aporta lo anterior a su primer registro.
 
-**Actividades con la misma hora de inicio.** La clave única de la tabla es
-`fecha_actividad`, pero Strava admite dos actividades que empiecen en el mismo instante.
-En ese caso se conserva una sola. La clave verdaderamente única es el identificador de
-Strava, que ya se guarda en `strava_id` pero todavía no se usa como clave. Cambiarla
-obliga a cambiar también cómo se enlaza `fc_manual`, que hoy apunta a `fecha_actividad`,
-así que queda pendiente como un cambio completo. Afecta a menos del 0.2 % del historial.
+**Series de pulso sin actividad.** Si una actividad se borra en Strava, o se vuelve a
+subir con otra hora de inicio, su serie de pulso manual se queda en `fc_manual` sin
+ninguna actividad que la use. No se pierde, pero deja de aplicarse hasta reasignarla a
+mano. Dos actividades que empiecen en el mismo instante se guardan las dos, y una serie
+cargada para esa hora se aplicaría a ambas.
 
 **Suspensión por inactividad.** Tanto el proyecto de Supabase como la aplicación de
 Streamlit Community Cloud se suspenden tras varios días sin uso. No hay pérdida de datos,

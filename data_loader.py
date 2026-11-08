@@ -2,8 +2,9 @@
 Módulo de Adquisición de Datos del SII Athletix.
 Implementa la capa de entrada del sistema con una estrategia híbrida:
 1. Carga inicial (backfill) desde el CSV histórico exportado de Strava.
-2. Sincronización incremental vía API REST de Strava (OAuth 2.0), que
-   descarga únicamente las actividades posteriores a la última registrada.
+2. Sincronización vía API REST de Strava (OAuth 2.0), que revisa el historial
+   completo en cada pasada: añade lo nuevo, actualiza lo que cambió y borra lo
+   que ya no existe en Strava.
 El resultado se persiste en Supabase (antes en un CSV local), actuando como
 capa de almacenamiento que sobrevive a los reinicios del entorno en la nube.
 """
@@ -21,7 +22,13 @@ from supabase import create_client, Client    # Cliente de la base de datos en l
 load_dotenv()  # Lee el .env local; en la nube no hace nada (las llaves ya están en Secrets)
 
 RUTA_CSV = "actividades_strava.csv"  # CSV histórico exportado de Strava (se queda en el repo)
-MARGEN_SINCRONIZACION = 3            # Días de solape al descargar novedades
+MAX_PAGINAS_STRAVA = 50              # Tope de seguridad, unas 10 000 actividades de 200 en 200
+TAMANO_LOTE_BORRADO = 100            # Los id a borrar viajan en la dirección de la petición
+# Si de golpe sobra más que esta fracción de la tabla no se borra nada, porque es más
+# probable un fallo de Strava que tantos borrados reales. El mínimo evita que en una tabla
+# pequeña el tope impida borrar incluso una sola actividad.
+PROPORCION_MAXIMA_BORRADO = 0.05
+MINIMO_BORRADO_PERMITIDO = 10
 URL_TOKEN = "https://www.strava.com/oauth/token"
 URL_ACTIVIDADES = "https://www.strava.com/api/v3/athlete/activities"
 TABLA_FC = "fc_manual"
@@ -81,24 +88,26 @@ def _obtener_access_token():
     respuesta.raise_for_status()
     return respuesta.json().get("access_token")
 
-def _descargar_actividades(access_token, desde_epoch=None, max_paginas=15):
-    """
-    Descarga actividades paginando la API (200 por página, tope de rate limit).
-    Si se indica 'desde_epoch', solo trae actividades posteriores a esa fecha.
+def _descargar_actividades(access_token, max_paginas=MAX_PAGINAS_STRAVA):
+    """Descarga el resumen de todas las actividades, de 200 en 200, sin pedir su detalle.
+
+    Args:
+        access_token (str): Token temporal de la API.
+        max_paginas (int): Tope de seguridad de páginas.
+    Returns:
+        tuple[list, bool]: Las actividades y si la descarga llegó hasta la última página.
     """
     cabecera = {"Authorization": f"Bearer {access_token}"}
     acumulado = []
     for pagina in range(1, max_paginas + 1):
         parametros = {"per_page": 200, "page": pagina}
-        if desde_epoch:
-            parametros["after"] = int(desde_epoch)
         respuesta = requests.get(URL_ACTIVIDADES, headers=cabecera, params=parametros, timeout=30)
         respuesta.raise_for_status()
         lote = respuesta.json()
         if not lote:
-            break
+            return acumulado, True
         acumulado.extend(lote)
-    return acumulado
+    return acumulado, False
 
 def _json_a_formato_csv(actividades):
     """Convierte el JSON de la API al mismo esquema de columnas que usaba el CSV."""
@@ -119,8 +128,8 @@ def _json_a_formato_csv(actividades):
     # El máximo por actividad es un suelo observado de la FC máxima real del atleta,
     # más informado que una estimación por edad.
     salida["Ritmo cardiaco máximo"] = df.get("max_heartrate")
-    # Se guarda sin usarlo todavía: es la clave única real de Strava y evitaría que dos
-    # actividades iniciadas en el mismo instante se colapsen en una sola fila.
+    # Es la clave única de la tabla: dos actividades pueden empezar en el mismo instante,
+    # pero nunca comparten id.
     salida["Id de Strava"] = df.get("id")
     salida["Velocidad promedio"] = df.get("average_speed")
     return salida
@@ -342,45 +351,91 @@ def guardar_ajustes(valores):
     except Exception:
         return False
     
-def sincronizar_con_strava(fecha_ultima_actividad=None):
+def _mismo_registro(nuevo, guardado):
+    """Indica si un registro de Strava coincide, columna por columna, con la fila guardada."""
+    for columna, valor in nuevo.items():
+        actual = guardado.get(columna)
+        # Los decimales se comparan con tolerancia porque pasan por la base de datos.
+        if isinstance(valor, float) and isinstance(actual, (int, float)):
+            if abs(valor - actual) > 1e-6:
+                return False
+        elif valor != actual:
+            return False
+    return True
+
+def _planificar_sincronizacion(registros, guardadas):
+    """Compara lo que hay en Strava con lo guardado y decide qué escribir y qué borrar.
+
+    Args:
+        registros (list[dict]): Actividades de Strava ya traducidas a columnas de la tabla.
+        guardadas (list[dict]): Filas actuales de la tabla, con esas mismas columnas.
+    Returns:
+        dict: 'altas' y 'cambios', registros que hay que escribir, y 'bajas', los
+            strava_id guardados que ya no existen en Strava.
     """
-    Descarga de la API únicamente las actividades posteriores a la última que ya
-    se tiene registrada y las guarda en Supabase mediante upsert. Como
-    'fecha_actividad' es columna única, un registro repetido se sobrescribe en
-    vez de duplicarse — el mismo efecto que antes lograba drop_duplicates().
-    Llamarla sin argumento descarga el histórico completo, útil para rellenar
-    columnas añadidas al esquema después de las primeras sincronizaciones.
-    Devuelve una tupla (numero_de_actividades_nuevas, mensaje_de_estado).
+    por_id = {int(fila["strava_id"]): fila for fila in guardadas}
+    en_strava = {int(registro["strava_id"]) for registro in registros}
+    altas = [r for r in registros if int(r["strava_id"]) not in por_id]
+    cambios = [r for r in registros if int(r["strava_id"]) in por_id
+               and not _mismo_registro(r, por_id[int(r["strava_id"])])]
+    bajas = [strava_id for strava_id in por_id if strava_id not in en_strava]
+    return {"altas": altas, "cambios": cambios, "bajas": bajas}
+
+def _contar(cantidad, singular, plural):
+    """Escribe una cantidad con la palabra en singular o plural según corresponda."""
+    return f"{cantidad} {singular if cantidad == 1 else plural}"
+
+def sincronizar_con_strava():
+    """
+    Revisa el historial completo de Strava y deja la tabla igual que allí: añade lo
+    nuevo, actualiza lo que cambió y borra lo que ya no existe. Solo pide la lista de
+    resúmenes, un pedido por cada 200 actividades, nunca el detalle de cada una. El
+    pulso manual vive en otra tabla sin llave foránea y no se toca nunca.
+    Devuelve una tupla (numero_de_cambios, mensaje_de_estado).
     """
     if not credenciales_strava_disponibles():
         return 0, "Faltan credenciales de Strava en el archivo .env."
     try:
         token = _obtener_access_token()
-        desde = None
-        if fecha_ultima_actividad is not None and pd.notna(fecha_ultima_actividad):
-            # Se retrocede un margen de seguridad porque el parámetro 'after' de la API filtra
-            # sobre la hora UTC, mientras que las fechas almacenadas son hora local. El upsert
-            # por 'fecha_actividad' evita que este solape genere duplicados.
-            corte = pd.Timestamp(fecha_ultima_actividad) - pd.Timedelta(days=MARGEN_SINCRONIZACION)
-            desde = corte.timestamp()
-        crudas = _descargar_actividades(token, desde_epoch=desde)
+        crudas, completa = _descargar_actividades(token)
         nuevas = _json_a_formato_csv(crudas)
         if nuevas.empty:
-            return 0, "Sin actividades nuevas. Ya estás al día."
+            return 0, "Strava no devolvió ninguna actividad, así que no se cambió nada."
 
-        # Strava admite dos actividades con la misma hora de inicio, pero esa columna es
-        # la clave única de la tabla y Postgres rechaza un lote que la repita. Se conserva
-        # la última, igual que hace después el filtrado por fecha del backend.
-        nuevas = nuevas.drop_duplicates(subset="Fecha de la actividad", keep="last")
+        # Una actividad subida durante la descarga desplaza las páginas y puede llegar dos
+        # veces, y Postgres rechaza un lote que repita la clave del upsert.
+        nuevas = nuevas.drop_duplicates(subset="Id de Strava", keep="last")
+        guardadas = _leer_tabla_paginada(TABLA_SYNC, ", ".join(MAPA_COLUMNAS_SYNC.values()))
+        plan = _planificar_sincronizacion(_df_a_registros_sync(nuevas), guardadas)
 
-        registros = _df_a_registros_sync(nuevas)
-        # El histórico completo supera el tamaño cómodo de una sola petición, así que
-        # el upsert se envía por lotes.
-        for inicio in range(0, len(registros), TAMANO_LOTE_UPSERT):
+        # Las altas van antes que las bajas: al resubir un archivo la actividad nueva entra
+        # antes de borrar la vieja, y si la escritura falla no se llega a borrar nada.
+        escribir = plan["altas"] + plan["cambios"]
+        for inicio in range(0, len(escribir), TAMANO_LOTE_UPSERT):
             _cliente_supabase().table(TABLA_SYNC).upsert(
-                registros[inicio:inicio + TAMANO_LOTE_UPSERT], on_conflict="fecha_actividad"
+                escribir[inicio:inicio + TAMANO_LOTE_UPSERT], on_conflict="strava_id"
             ).execute()
-        return len(registros), f"Se sincronizaron {len(registros)} actividades."
+
+        # Un fallo de Strava que devolviera una lista corta no debe poder vaciar la tabla.
+        bajas, aviso = plan["bajas"], ""
+        if bajas and not completa:
+            aviso = " No se borró nada porque la descarga no llegó hasta la última página."
+            bajas = []
+        elif len(bajas) > max(PROPORCION_MAXIMA_BORRADO * len(guardadas), MINIMO_BORRADO_PERMITIDO):
+            aviso = (f" Hay {len(bajas)} actividades guardadas que ya no aparecen en Strava, "
+                     "demasiadas de golpe para borrarlas solas. Revisa tu cuenta de Strava.")
+            bajas = []
+        for inicio in range(0, len(bajas), TAMANO_LOTE_BORRADO):
+            _cliente_supabase().table(TABLA_SYNC).delete().in_(
+                "strava_id", bajas[inicio:inicio + TAMANO_LOTE_BORRADO]
+            ).execute()
+
+        cambios = len(escribir) + len(bajas)
+        if not cambios:
+            return 0, ("No se cambió nada." + aviso) if aviso else "Sin cambios. Ya estás al día."
+        return cambios, (f"Sincronizado con Strava. {_contar(len(plan['altas']), 'nueva', 'nuevas')}, "
+                         f"{_contar(len(plan['cambios']), 'actualizada', 'actualizadas')} y "
+                         f"{_contar(len(bajas), 'borrada', 'borradas')}." + aviso)
     except requests.exceptions.HTTPError as error:
         return 0, f"Strava rechazó la petición ({error.response.status_code}). Revisa tus credenciales."
     except Exception as error:
@@ -399,6 +454,7 @@ def leer_fuentes_crudas():
         "Fecha de la actividad", "Tipo de actividad", "Distancia", "Distancia.1",
         "Tiempo en movimiento", "Tiempo transcurrido", "Tiempo transcurrido.1",
         "Desnivel positivo", "Ritmo cardiaco promedio", "Velocidad promedio",
+        "Id de Strava",
     ]
     fuentes = []
 

@@ -19,5 +19,5 @@ if faltan:
     print("Cópialas de los Secrets de Streamlit Cloud y vuelve a ejecutar.")
 else:
     print("Descargando todo el histórico desde Strava. Tarda alrededor de un minuto.")
-    cuantas, mensaje = data_loader.sincronizar_con_strava(None)
+    cuantas, mensaje = data_loader.sincronizar_con_strava()
     print(mensaje)

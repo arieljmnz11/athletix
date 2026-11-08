@@ -112,15 +112,19 @@ with st.sidebar:
     st.subheader("🔄 Sincronización")
 
     if data_loader.credenciales_strava_disponibles():
-        if st.button("Descargar actividades nuevas", width="stretch"):
-            with st.spinner("Conectando con Strava..."):
-                ultima = datos_completos["Fecha"].max()
-                nuevas, mensaje = data_loader.sincronizar_con_strava(ultima)
+        # El aviso se guarda en la sesión porque la recarga que sigue a una sincronización
+        # con cambios lo borraría al instante, igual que pasaba con el pulso manual.
+        if st.session_state.get("aviso_sincronizacion"):
+            st.success(st.session_state.pop("aviso_sincronizacion"))
 
-            if nuevas > 0:
+        if st.button("Sincronizar con Strava", width="stretch"):
+            with st.spinner("Revisando todo tu historial en Strava..."):
+                cambios, mensaje = data_loader.sincronizar_con_strava()
+
+            if cambios > 0:
                 obtener_datos.clear()
                 st.session_state.version_datos += 1
-                st.success(mensaje)
+                st.session_state.aviso_sincronizacion = mensaje
                 st.rerun()
             else:
                 st.info(mensaje)
