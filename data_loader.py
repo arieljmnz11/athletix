@@ -288,8 +288,9 @@ def borrar_fc_manual(fecha_actividad):
         return 0, f"No se pudo borrar la serie: {error}"
 
 def resumen_fc_manual():
-    """Devuelve FC media ponderada y FC máxima por actividad con serie cargada."""
-    columnas_vacias = ["fecha_actividad", "fc_media_manual", "fc_maxima_manual"]
+    """Devuelve FC media ponderada, FC máxima, muestras y duración por actividad con serie cargada."""
+    columnas_vacias = ["fecha_actividad", "fc_media_manual", "fc_maxima_manual",
+                       "muestras", "duracion_s"]
     muestras = leer_fc_manual()
     if muestras.empty:
         return pd.DataFrame(columns=columnas_vacias)
@@ -302,12 +303,108 @@ def resumen_fc_manual():
             "fecha_actividad": clave,
             "fc_media_manual": metricas_fc.media_ponderada_por_tiempo(tiempos, pulsos),
             "fc_maxima_manual": float(pulsos.max()),
+            "muestras": len(tiempos),
+            # Se cuenta desde la hora de inicio, igual que el tiempo de la actividad en
+            # Strava, para poder comparar una serie con las actividades de su día.
+            "duracion_s": float(tiempos[-1]),
         })
     return pd.DataFrame(filas)
 
-def listar_actividades_sin_fc():
-    """Lista las actividades sincronizadas sin pulso, para saber dónde cargar la serie."""
-    datos = _leer_sync_supabase()
+def leer_actividades_sincronizadas():
+    """Devuelve la tabla sincronizada con los nombres de columna originales."""
+    return _leer_sync_supabase()
+
+def buscar_series_sin_actividad(resumen, actividades):
+    """Encuentra las series de pulso cuya hora de inicio ya no tiene actividad y propone destino.
+
+    Args:
+        resumen (pd.DataFrame): Salida de resumen_fc_manual.
+        actividades (pd.DataFrame): Salida de leer_actividades_sincronizadas.
+    Returns:
+        list[dict]: Una entrada por serie sin actividad, con su clave, muestras, duración y
+            las actividades candidatas del mismo día, de la más probable a la menos.
+    """
+    # Con la tabla vacía todas las series parecerían huérfanas, y lo más probable es que
+    # la lectura haya fallado, así que no se señala ninguna.
+    if resumen.empty or actividades.empty:
+        return []
+
+    claves = set(actividades["Fecha de la actividad"].astype(str))
+    con_serie = set(resumen["fecha_actividad"])
+    # Solo pueden recibir la serie las actividades a las que el pulso manual completaría,
+    # sin pulso propio de Strava y sin otra serie que se mezcle con esta.
+    libres = actividades[actividades["Ritmo cardiaco promedio"].isna()
+                         & ~actividades["Fecha de la actividad"].astype(str).isin(con_serie)]
+
+    huerfanas = []
+    for serie in resumen.to_dict("records"):
+        clave = serie["fecha_actividad"]
+        if clave in claves:
+            continue
+        inicio = pd.to_datetime(clave, utc=True, errors="coerce")
+        candidatas = []
+        for actividad in libres.to_dict("records"):
+            clave_actividad = str(actividad["Fecha de la actividad"])
+            if clave_actividad[:10] != clave[:10]:
+                continue
+            # La serie a veces cubre el tiempo en movimiento y a veces el transcurrido,
+            # según cómo el reloj trate las pausas, así que vale el más cercano de los dos.
+            tiempos = [t for t in (actividad["Tiempo en movimiento"], actividad["Tiempo transcurrido"])
+                       if pd.notna(t)]
+            if not tiempos:
+                continue
+            distancia = actividad.get("Distancia.1")
+            candidatas.append({
+                "clave": clave_actividad,
+                "tipo": actividad["Tipo de actividad"],
+                "distancia_km": float(distancia) / 1000 if pd.notna(distancia) else None,
+                "duracion_s": float(actividad["Tiempo en movimiento"]),
+                "diferencia_s": min(abs(serie["duracion_s"] - float(t)) for t in tiempos),
+                "separacion_s": abs((pd.to_datetime(clave_actividad, utc=True) - inicio).total_seconds()),
+            })
+        candidatas.sort(key=lambda c: (c["diferencia_s"], c["separacion_s"]))
+        huerfanas.append({"clave": clave, "muestras": int(serie["muestras"]),
+                          "duracion_s": serie["duracion_s"], "candidatas": candidatas})
+    return huerfanas
+
+def reasignar_fc_manual(clave_vieja, clave_nueva):
+    """Mueve todas las muestras de una serie de pulso a otra actividad.
+
+    Args:
+        clave_vieja (str): Hora de inicio con la que está guardada la serie.
+        clave_nueva (str): Hora de inicio de la actividad que la recibe.
+    Returns:
+        tuple[int, str]: Muestras movidas y mensaje de estado.
+    """
+    try:
+        # Si el destino ya tuviera pulso, las dos series se mezclarían o chocarían por tiempo_s.
+        ocupada = _cliente_supabase().table(TABLA_FC).select("id").eq(
+            "fecha_actividad", clave_nueva
+        ).limit(1).execute().data
+        if ocupada:
+            return 0, "Esa actividad ya tiene una serie de pulso, así que no se movió nada."
+        # Es una sola actualización, así que se mueven todas las muestras o ninguna.
+        respuesta = _cliente_supabase().table(TABLA_FC).update(
+            {"fecha_actividad": clave_nueva}
+        ).eq("fecha_actividad", clave_vieja).execute()
+        movidas = len(respuesta.data or [])
+        if not movidas:
+            return 0, "No se encontró la serie, puede que ya se haya movido o borrado."
+        return movidas, f"Se movieron {movidas} muestras de pulso a la actividad elegida."
+    except Exception as error:
+        return 0, f"No se pudo mover la serie: {error}"
+
+def listar_actividades_sin_fc(datos=None):
+    """Lista las actividades sincronizadas sin pulso, para saber dónde cargar la serie.
+
+    Args:
+        datos (pd.DataFrame | None): Tabla ya leída con leer_actividades_sincronizadas,
+            o None para leerla aquí.
+    Returns:
+        pd.DataFrame: Fecha y tipo de las actividades sin pulso, de la más reciente a la más antigua.
+    """
+    if datos is None:
+        datos = _leer_sync_supabase()
     if datos.empty or "Ritmo cardiaco promedio" not in datos.columns:
         return pd.DataFrame(columns=["Fecha de la actividad", "Tipo de actividad"])
     sin_fc = datos[datos["Ritmo cardiaco promedio"].isna()]

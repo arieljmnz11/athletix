@@ -171,7 +171,10 @@ que garantiza que borrar una actividad en Strava nunca borre su pulso manual, qu
 
 El pulso manual se enlaza por la hora de inicio y no por `strava_id` a propósito. Al
 borrar y volver a subir el mismo archivo, Strava le asigna un id nuevo pero conserva la
-hora de inicio, así que la serie sigue enlazada sin hacer nada.
+hora de inicio, así que la serie sigue enlazada sin hacer nada. Cuando la serie sí se
+suelta, la pestaña de Pulso manual la lista y propone la actividad del mismo día con la
+duración más parecida. Las muestras solo se mueven, en una única actualización, cuando
+se confirma con un clic.
 
 La tabla `ajustes` tiene una sola fila, forzada por `check (id = 1)`, porque solo hay un
 atleta. La aplicación la guarda con `upsert` sobre `id`, así que si la fila todavía no
@@ -330,8 +333,9 @@ se toma como fuente autoritativa y el CSV solo aporta lo anterior a su primer re
 
 **Series de pulso sin actividad.** Si una actividad se borra en Strava, o se vuelve a
 subir con otra hora de inicio, su serie de pulso manual se queda en `fc_manual` sin
-ninguna actividad que la use. No se pierde, pero deja de aplicarse hasta reasignarla a
-mano. Dos actividades que empiecen en el mismo instante se guardan las dos, y una serie
+ninguna actividad que la use. No se pierde, pero deja de aplicarse hasta reasignarla desde
+la pestaña de Pulso manual. La propuesta de destino solo puede usar el día y la duración,
+porque la serie no guarda el deporte y ese dato desaparece junto con la actividad. Dos actividades que empiecen en el mismo instante se guardan las dos, y una serie
 cargada para esa hora se aplicaría a ambas.
 
 **Suspensión por inactividad.** Tanto el proyecto de Supabase como la aplicación de

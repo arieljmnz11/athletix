@@ -69,6 +69,15 @@ def etiqueta_actividad(clave, tipo, tiene_serie=False):
     return f"{texto} — {tipo}{marca}"
 
 
+def etiqueta_candidata(candidata):
+    """Describe una actividad candidata a recibir una serie de pulso sin actividad."""
+    partes = [etiqueta_actividad(candidata["clave"], candidata["tipo"])]
+    if candidata["distancia_km"] is not None:
+        partes.append(f"{candidata['distancia_km']:.2f} km")
+    partes.append(backend.formatear_duracion_corta(candidata["duracion_s"]))
+    return " · ".join(partes)
+
+
 # El ttl acota cuánto puede envejecer la caché si los datos cambian desde otra
 # sesión; el .clear() explícito de cada escritura fuerza el refresco inmediato.
 @st.cache_data(ttl=600, show_spinner="Procesando actividades...")
@@ -652,9 +661,59 @@ with tab_pulso:
     if st.session_state.get("aviso_pulso"):
         st.success(st.session_state.pop("aviso_pulso"))
 
-    pendientes = data_loader.listar_actividades_sin_fc()
+    # La tabla se lee una sola vez y de ella salen las dos listas, porque cada lectura
+    # extra suma medio segundo a cualquier clic en la app.
+    actividades_sync = data_loader.leer_actividades_sincronizadas()
+    pendientes = data_loader.listar_actividades_sin_fc(actividades_sync)
     resumen_manual = data_loader.resumen_fc_manual()
     claves_con_serie = set(resumen_manual["fecha_actividad"]) if not resumen_manual.empty else set()
+
+    huerfanas = data_loader.buscar_series_sin_actividad(resumen_manual, actividades_sync)
+    if huerfanas:
+        st.warning("Estas series de pulso ya no coinciden con ninguna actividad. Suele pasar al borrar "
+                   "una salida en Strava o al subirla otra vez con otra hora. Nada se mueve ni se borra "
+                   "hasta que lo confirmes.")
+
+        for huerfana in huerfanas:
+            clave_huerfana = huerfana["clave"]
+            with st.container(border=True):
+                fecha_huerfana = etiqueta_actividad(clave_huerfana, "").replace(" — ", "")
+                st.markdown(f"**{fecha_huerfana}** · {huerfana['muestras']} muestras · "
+                            f"{backend.formatear_duracion_corta(huerfana['duracion_s'])}")
+
+                if huerfana["candidatas"]:
+                    opciones = {c["clave"]: c for c in huerfana["candidatas"]}
+                    destino = st.selectbox(
+                        "Mover a", list(opciones), key=f"destino_{clave_huerfana}",
+                        format_func=lambda c, opciones=opciones: etiqueta_candidata(opciones[c]),
+                        help="La primera es la actividad de ese día cuya duración se parece más a la "
+                             "de la serie. El deporte no sirve para elegir porque se pierde al borrar "
+                             "la actividad.")
+                    if st.button("Mover la serie a esta actividad", key=f"mover_{clave_huerfana}",
+                                 width="stretch"):
+                        movidas, mensaje = data_loader.reasignar_fc_manual(clave_huerfana, destino)
+                        if movidas:
+                            obtener_datos.clear()
+                            st.session_state.version_datos += 1
+                            st.session_state.aviso_pulso = mensaje
+                            st.rerun()
+                        st.error(mensaje)
+                else:
+                    st.caption("Ese día no hay ninguna actividad sin pulso a la que moverla.")
+
+                confirmar_huerfana = st.checkbox("Confirmo que quiero descartar esta serie",
+                                                 key=f"confirmar_{clave_huerfana}")
+                if st.button("Borrar esta serie", key=f"borrar_{clave_huerfana}", width="stretch",
+                             disabled=not confirmar_huerfana):
+                    borradas, mensaje = data_loader.borrar_fc_manual(clave_huerfana)
+                    if borradas:
+                        obtener_datos.clear()
+                        st.session_state.version_datos += 1
+                        st.session_state.aviso_pulso = mensaje
+                        st.rerun()
+                    st.error(mensaje)
+
+        st.divider()
 
     if pendientes.empty:
         st.info("Todas las actividades sincronizadas traen pulso propio de Strava. Sincroniza de nuevo "

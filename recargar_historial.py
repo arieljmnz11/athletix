@@ -1,7 +1,8 @@
-"""Descarga de nuevo el histórico completo de Strava y lo guarda en Supabase.
+"""Sincroniza el histórico completo de Strava con Supabase desde la consola.
 
-Operación de mantenimiento puntual: se ejecuta a mano desde la raíz del proyecto,
-después de vaciar la tabla, y no forma parte de la aplicación.
+Hace lo mismo que el botón Sincronizar con Strava de la aplicación. Se ejecuta a mano
+desde la raíz del proyecto y no hace falta vaciar la tabla antes, porque cada
+sincronización revisa el historial entero.
 """
 
 import os
