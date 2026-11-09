@@ -342,7 +342,7 @@ cargada para esa hora se aplicaría a ambas.
 Streamlit Community Cloud se suspenden tras varios días sin uso. No hay pérdida de datos,
 pero la primera visita después de un periodo largo requiere reactivarlos.
 
-## Referencias
+## Referencias.
 
 Edwards, S. (1993). *The Heart Rate Monitor Book*. Polar Electro Oy.
 
