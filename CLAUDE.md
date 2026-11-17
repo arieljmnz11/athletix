@@ -55,7 +55,7 @@ mostrarse, se comenta con `#` en vez de borrarlo.
 | `ajustes.py` | Lectura, escritura y valores derivados de los ajustes personales |
 | `config.py` | Zona horaria y utilidades de fecha |
 | `comparar_modelos.py` | Script de consola, documenta y recalcula por qué se eligió el modelo |
-| `recargar_historial.py` | Mantenimiento puntual, recarga el histórico completo desde Strava |
+| `recargar_historial.py` | Hace lo mismo que el botón de sincronizar, pero desde la consola |
 
 `metricas_fc.py` existe aparte porque lo necesitan `data_loader` y `backend`, y alojarlo
 en cualquiera de los dos crearía un import circular.
@@ -66,12 +66,24 @@ PostgreSQL en Supabase. El disco de Streamlit Community Cloud es efímero, nada 
 en archivos. Cinco tablas:
 
 - `actividades_sincronizadas`, espejo de Strava con el histórico completo desde el 09/10/2020.
-  Clave única `fecha_actividad`, de tipo texto. Incluye `fc_maxima` y `strava_id`.
-- `fc_manual`, una fila por muestra de pulso, única por `fecha_actividad` y `tiempo_s`.
-  Siempre se lee ordenada por tiempo dentro de cada actividad, nunca por id de inserción.
+  Clave única `strava_id`. `fecha_actividad` es texto y no es única, porque dos actividades
+  pueden empezar en el mismo instante y al resubir un archivo la nueva convive un momento
+  con la vieja. Incluye `fc_maxima`.
+- `fc_manual`, una fila por muestra de pulso, única por `fecha_actividad` y `tiempo_s`. No
+  tiene llave foránea hacia las actividades. Siempre se lee ordenada por tiempo dentro de
+  cada actividad, nunca por id de inserción.
 - `historial_chat`, memoria del agente.
 - `diario_estado`, estado físico diario, `fecha` como clave primaria.
 - `ajustes`, fila única con `check (id = 1)`.
+
+La sincronización pide en cada pasada la lista completa de resúmenes de Strava, nunca el
+detalle de cada actividad, así que también llega lo que subo tarde con fecha vieja.
+Deduplica el lote por `strava_id`, escribe primero lo nuevo y lo editado con upsert por
+`strava_id`, y después borra lo que ya no está en Strava. Dos protecciones impiden que un
+fallo de Strava vacíe la tabla: no se borra nada si la descarga no llegó hasta la última
+página, ni si de golpe sobra más del 5 % de la tabla, con un mínimo de 10. Al terminar se
+limpia la caché y la barra lateral dice cuántas actividades entraron, se actualizaron y se
+borraron.
 
 El `.env` local tiene las credenciales, así que cualquier script que ejecutes en esta
 carpeta lee y escribe en el Supabase real. Ten cuidado con lo que escribes.
@@ -84,6 +96,12 @@ dame el SQL y lo corro, no intentes aplicarlo desde aquí.
 - El CSV del repositorio aporta cero filas mientras Supabase esté vivo, porque la API
   cubre todo el historial y una regla de corte por `Origen` le deja al CSV solo lo
   anterior a su primer registro. El CSV se mantiene como copia de seguridad.
+- El pulso manual se enlaza por la hora de inicio y no por `strava_id`, porque al resubir
+  un archivo Strava le da un id nuevo pero conserva la hora. Nunca se borra solo, ni por
+  código ni por una regla en cadena de la base de datos, porque es la única copia que
+  existe. Si una serie se queda sin actividad, la pestaña Pulso manual la lista y solo se
+  mueve o se borra con confirmación.
+- Las tres carreras de 100 m del 26/10/2023 son reales, de un intercolegial, y se quedan.
 - El TRIMP de Edwards no alimenta la columna `Carga`, para no mezclar escalas en el ACWR,
   y se calcula siempre sobre porcentaje de FC máxima, nunca sobre Karvonen.
 - La carga usa tiempo de movimiento. El tiempo transcurrido se guarda aparte porque es el
@@ -126,17 +144,19 @@ dame el SQL y lo corro, no intentes aplicarlo desde aquí.
 
 El trabajo grande está repartido en etapas, una por vez:
 
-1. **Objetivos.** Tabla de objetivos de carrera con fecha, distancia, desnivel y tiempo
-   meta. Disciplina principal, fuerza y disponibilidad en Ajustes. Que el agente y el
-   predictor usen el objetivo activo.
-2. **Series de Strava.** Traer las series de pulso, pendiente y altitud bajo demanda desde
-   la API, sin guardarlas. De ahí sale el Grade Adjusted Pace real, que es lo que falta
-   para que el modelo entienda la montaña, más la estimación de potencia en ciclismo.
+1. **Series de Strava.** Traer las series de pulso, pendiente y altitud bajo demanda desde
+   la API, sin guardarlas. Salen de la API de Strava y no de la descarga de datos de la
+   cuenta, y solo se traen las de las carreras recientes. El diseño de esta etapa lo decido
+   aparte. De ahí sale el Grade Adjusted Pace real, que es lo que falta para que el modelo
+   entienda la montaña, más la estimación de potencia en ciclismo.
    Traer también los mejores esfuerzos de la API, el 1 km, el 5 km y el 10 km más rápidos
    dentro de cada salida. Hoy el modelo y las marcas solo ven el ritmo medio de la
    actividad entera y se quedan cortos: en octubre de 2026 Athletix predecía 6:03 en 10 km,
    Strava 4:57, y mi mejor marca real era 5:29. Hasta tener el GAP, el verificador no
    sirve para metas de trail, porque compararía una meta de montaña contra marcas en llano.
+2. **Objetivos.** Tabla de objetivos de carrera con fecha, distancia, desnivel y tiempo
+   meta. Disciplina principal, fuerza y disponibilidad en Ajustes. Que el agente y el
+   predictor usen el objetivo activo.
 3. **Planificador con calendario.** La IA propone una semana, el código la valida contra
    el ACWR y la regla del 10 % antes de mostrarla.
 4. **Limpieza.** Modularizar `app.py` en una carpeta `vistas/` con un archivo por pestaña,
