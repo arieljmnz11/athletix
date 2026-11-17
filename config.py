@@ -33,3 +33,18 @@ def hoy():
 def fecha_en_texto(fecha):
     """Formatea una fecha en español sin depender del locale del sistema operativo."""
     return f"{DIAS[fecha.weekday()]} {fecha.day} de {MESES[fecha.month - 1]} de {fecha.year}"
+
+def fecha_hora_corta(clave):
+    """Convierte la clave de una actividad en la fecha y hora que se muestran en pantalla.
+
+    Args:
+        clave (str): Hora de inicio tal como la guarda Strava, por ejemplo 2026-11-16T16:00:08Z.
+    Returns:
+        str: Fecha y hora como 16/11/2026 16:00, o la clave tal cual si no se puede leer.
+    """
+    # Strava etiqueta la hora local con sufijo Z, así que se muestra sin convertir de zona.
+    # La Z se reemplaza porque las versiones de Python anteriores a la 3.11 no la leen.
+    try:
+        return datetime.fromisoformat(str(clave).replace("Z", "+00:00")).strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return str(clave)

@@ -283,7 +283,7 @@ def borrar_fc_manual(fecha_actividad):
             "fecha_actividad", fecha_actividad
         ).execute()
         borradas = len(respuesta.data or [])
-        return borradas, f"Se eliminaron {borradas} muestras de {fecha_actividad}."
+        return borradas, f"Se eliminaron {borradas} muestras de {config.fecha_hora_corta(fecha_actividad)}."
     except Exception as error:
         return 0, f"No se pudo borrar la serie: {error}"
 

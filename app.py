@@ -59,12 +59,8 @@ def etiqueta_actividad(clave, tipo, tiene_serie=False):
     Returns:
         str: Etiqueta con fecha, hora, deporte y marca de serie existente.
     """
-    fecha = pd.to_datetime(clave, errors="coerce", utc=True)
-    if pd.isna(fecha):
-        texto = str(clave)
-    else:
-        # La API etiqueta la hora local con sufijo Z; descartar la zona conserva la hora real.
-        texto = fecha.tz_localize(None).strftime("%d/%m/%Y %H:%M")
+    # El formato vive en config para que la lista y los mensajes muestren la misma fecha.
+    texto = config.fecha_hora_corta(clave)
     marca = " · pulso cargado" if tiene_serie else ""
     return f"{texto} — {tipo}{marca}"
 
